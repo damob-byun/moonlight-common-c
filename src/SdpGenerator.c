@@ -309,6 +309,15 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
         else {
             err |= addAttributeString(&optionHead, "x-ss-video[0].chromaSamplingType", "0");
         }
+
+        // RePc protocol version and feature negotiation
+        snprintf(payloadStr, sizeof(payloadStr), "%d", REPC_PROTOCOL_VERSION);
+        err |= addAttributeString(&optionHead, "x-ss-general.repcVersion", payloadStr);
+
+        uint32_t repcFeatures = REPC_FF_ADAPTIVE_BITRATE | REPC_FF_AUDIO_STATE |
+                                REPC_FF_CURSOR_STREAMING | REPC_FF_LOW_LATENCY_INPUT;
+        snprintf(payloadStr, sizeof(payloadStr), "%u", repcFeatures);
+        err |= addAttributeString(&optionHead, "x-ss-general.repcFeatures", payloadStr);
     }
 
     snprintf(payloadStr, sizeof(payloadStr), "%d", StreamConfig.width);

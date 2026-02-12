@@ -154,25 +154,21 @@ typedef struct _DECODE_UNIT {
     // (happens when the frame is repeated).
     uint16_t frameHostProcessingLatency;
 
-    // Receive time of first buffer in microseconds.
-    uint64_t receiveTimeUs;
+    // Receive time of first buffer. This value uses an implementation-defined epoch,
+    // but the same epoch as enqueueTimeMs and LiGetMillis().
+    uint64_t receiveTimeMs;
 
     // Time the frame was fully assembled and queued for the video decoder to process.
     // This is also approximately the same time as the final packet was received, so
-    // enqueueTimeUs - receiveTimeUs is the time taken to receive the frame. At the
+    // enqueueTimeMs - receiveTimeMs is the time taken to receive the frame. At the
     // time the decode unit is passed to submitDecodeUnit(), the total queue delay
-    // can be calculated. This value is in microseconds.
-    uint64_t enqueueTimeUs;
+    // can be calculated by LiGetMillis() - enqueueTimeMs.
+    uint64_t enqueueTimeMs;
 
-    // Presentation time in microseconds with the epoch at the first captured frame.
+    // Presentation time in milliseconds with the epoch at the first captured frame.
     // This can be used to aid frame pacing or to drop old frames that were queued too
     // long prior to display.
-    uint64_t presentationTimeUs;
-
-    // Original RTP timestamp in 90kHz units. Useful when using APIs that deal with integer
-    // time such as Apple's CMTime. To exactly recover the RTP timestamp, use something like
-    // CMTimeMake((int64_t)du->rtpTimestamp, 90000);
-    uint32_t rtpTimestamp;
+    unsigned int presentationTimeMs;
 
     // Length of the entire buffer chain in bytes
     int fullLength;
@@ -483,6 +479,22 @@ typedef void(*ConnListenerSetAdaptiveTriggers)(uint16_t controllerNumber, uint8_
 // This callback is invoked to set a controller's RGB LED (if present).
 typedef void(*ConnListenerSetControllerLED)(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t b);
 
+// RePc Extensions: This callback is invoked when the server acknowledges a bitrate change.
+typedef void(*ConnListenerBitrateChanged)(int newBitrateKbps, int maxBitrateKbps);
+
+// RePc Extensions: This callback is invoked when the server sends an audio state change.
+// state is 0 (SILENT) or 1 (ACTIVE).
+typedef void(*ConnListenerAudioStateChanged)(int state);
+
+// RePc Extensions: This callback is invoked when the server sends a cursor position update.
+typedef void(*ConnListenerSetCursorPosition)(int x, int y, int screenWidth, int screenHeight, int visible);
+
+// RePc Extensions: This callback is invoked when the server sends a new cursor shape.
+// pixelData contains RGBA pixel data. pixelDataLen is in bytes.
+typedef void(*ConnListenerSetCursorShape)(int shapeId, int type, int width, int height,
+                                          int hotspotX, int hotspotY,
+                                          const uint8_t* pixelData, int pixelDataLen);
+
 typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerStageStarting stageStarting;
     ConnListenerStageComplete stageComplete;
@@ -497,6 +509,12 @@ typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerSetMotionEventState setMotionEventState;
     ConnListenerSetControllerLED setControllerLED;
     ConnListenerSetAdaptiveTriggers setAdaptiveTriggers;
+
+    // RePc Extensions (NULL if not supported by client)
+    ConnListenerBitrateChanged bitrateChanged;
+    ConnListenerAudioStateChanged audioStateChanged;
+    ConnListenerSetCursorPosition setCursorPosition;
+    ConnListenerSetCursorShape setCursorShape;
 } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
 
 // Use this function to zero the connection callbacks when allocated on the stack or heap
@@ -837,12 +855,7 @@ int LiSendHighResScrollEvent(short scrollAmount);
 int LiSendHScrollEvent(signed char scrollClicks);
 int LiSendHighResHScrollEvent(short scrollAmount);
 
-// This function returns a time in microseconds with an implementation-defined epoch.
-// It should only ever be compared with the return value from a previous call to itself.
-uint64_t LiGetMicroseconds(void);
-
 // This function returns a time in milliseconds with an implementation-defined epoch.
-// It should only ever be compared with the return value from a previous call to itself.
 uint64_t LiGetMillis(void);
 
 // This is a simplistic STUN function that can assist clients in getting the WAN address
@@ -864,36 +877,6 @@ int LiGetPendingAudioFrames(void);
 // milliseconds rather than frames, which allows callers to be agnostic of the
 // negotiated audio frame duration.
 int LiGetPendingAudioDuration(void);
-
-// Returns a pointer to a struct containing various statistics about the RTP audio stream.
-// The data should be considered read-only and must not be modified.
-typedef struct _RTP_AUDIO_STATS {
-    uint32_t packetCountAudio;         // total audio packets
-    uint32_t packetCountFec;           // total packets of type FEC
-    uint32_t packetCountFecRecovered;  // a packet was saved
-    uint32_t packetCountFecFailed;     // tried to recover but too much was lost
-    uint32_t packetCountOOS;           // out-of-sequence packets
-    uint32_t packetCountInvalid;       // corrupted packets, etc
-    uint32_t packetCountFecInvalid;    // invalid FEC packet
-} RTP_AUDIO_STATS, *PRTP_AUDIO_STATS;
-
-const RTP_AUDIO_STATS* LiGetRTPAudioStats(void);
-
-// Returns a pointer to a struct containing various statistics about the RTP video stream.
-// The data should be considered read-only and must not be modified.
-// Right now this is mainly used to track total video and FEC packets, as there are
-// many video stats already implemented at a higher level in moonlight-qt.
-typedef struct _RTP_VIDEO_STATS {
-    uint32_t packetCountVideo;         // total video packets
-    uint32_t packetCountFec;           // total packets of type FEC
-    uint32_t packetCountFecRecovered;  // a packet was saved
-    uint32_t packetCountFecFailed;     // tried to recover but too much was lost
-    uint32_t packetCountOOS;           // out-of-sequence packets
-    uint32_t packetCountInvalid;       // corrupted packets, etc
-    uint32_t packetCountFecInvalid;    // invalid FEC packet
-} RTP_VIDEO_STATS, *PRTP_VIDEO_STATS;
-
-const RTP_VIDEO_STATS* LiGetRTPVideoStats(void);
 
 // Port index flags for use with LiGetPortFromPortFlagIndex() and LiGetProtocolFromPortFlagIndex()
 #define ML_PORT_INDEX_TCP_47984 0
@@ -922,7 +905,7 @@ const RTP_VIDEO_STATS* LiGetRTPVideoStats(void);
 unsigned int LiGetPortFlagsFromStage(int stage);
 unsigned int LiGetPortFlagsFromTerminationErrorCode(int errorCode);
 
-// Returns the IPPROTO_* value for the specified port index
+// Returns the IPPROTO_* value for the specified port index 
 int LiGetProtocolFromPortFlagIndex(int portFlagIndex);
 
 // Returns the port number for the specified port index
@@ -1003,6 +986,29 @@ void LiRequestIdrFrame(void);
 #define LI_FF_PEN_TOUCH_EVENTS        0x01 // LiSendTouchEvent()/LiSendPenEvent() supported
 #define LI_FF_CONTROLLER_TOUCH_EVENTS 0x02 // LiSendControllerTouchEvent() supported
 uint32_t LiGetHostFeatureFlags(void);
+
+// RePc Extensions: Feature flags for capability negotiation
+#define REPC_FF_ADAPTIVE_BITRATE  0x04  // Real-time adaptive bitrate control
+#define REPC_FF_AUDIO_STATE       0x08  // Server-side audio silence detection
+#define REPC_FF_CURSOR_STREAMING  0x10  // Client-side cursor rendering
+#define REPC_FF_LOW_LATENCY_INPUT 0x20  // Low-latency unreliable mouse delivery
+
+// RePc Extensions: Returns the negotiated RePc feature flags (REPC_FF_* bitmask).
+// Returns 0 if the server does not support RePc extensions.
+uint32_t LiGetRepcFeatureFlags(void);
+
+// RePc Extensions: Sends a bitrate change request to the server.
+// bitrateKbps: desired bitrate in Kbps
+// reason: REPC_BITRATE_REASON_* value
+// lossPercent: current observed packet loss percentage (0-100)
+// rttMs: current observed RTT in milliseconds
+// Returns 0 on success, negative on error, or LI_ERR_UNSUPPORTED if not supported.
+int LiSendBitrateRequest(int bitrateKbps, int reason, int lossPercent, int rttMs);
+
+// RePc Extensions: Set mouse input batching interval in milliseconds.
+// Lower values = less latency but more packets. Default is 1ms.
+// Set to 0 for immediate send (no batching).
+void LiSetMouseBatchingInterval(int intervalMs);
 
 #ifdef __cplusplus
 }

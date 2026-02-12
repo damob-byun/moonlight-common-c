@@ -36,6 +36,7 @@ uint32_t SunshineFeatureFlags;
 uint32_t EncryptionFeaturesSupported;
 uint32_t EncryptionFeaturesRequested;
 uint32_t EncryptionFeaturesEnabled;
+uint32_t RepcFeaturesEnabled;
 
 // Connection stages
 static const char* stageNames[STAGE_MAX] = {
@@ -260,6 +261,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     memset(&LocalAddr, 0, sizeof(LocalAddr));
     NegotiatedVideoFormat = 0;
+    RepcFeaturesEnabled = 0;
     memcpy(&StreamConfig, streamConfig, sizeof(StreamConfig));
     RemoteAddrString = strdup(serverInfo->address);
 
@@ -377,19 +379,6 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         ListenerCallbacks.stageFailed(STAGE_NAME_RESOLUTION, err);
         goto Cleanup;
     }
-
-    // Resolve LocalAddr by RemoteAddr.
-    {
-        SOCKADDR_LEN localAddrLen;
-        err = getLocalAddressByUdpConnect(&RemoteAddr, AddrLen, RtspPortNumber, &LocalAddr, &localAddrLen);
-        if (err != 0) {
-            Limelog("failed to resolve local addr: %d\n", err);
-            ListenerCallbacks.stageFailed(STAGE_NAME_RESOLUTION, err);
-            goto Cleanup;
-        }
-        LC_ASSERT(localAddrLen == AddrLen);
-    }
-
     stage++;
     LC_ASSERT(stage == STAGE_NAME_RESOLUTION);
     ListenerCallbacks.stageComplete(STAGE_NAME_RESOLUTION);
@@ -545,6 +534,10 @@ Cleanup:
         LiStopConnection();
     }
     return err;
+}
+
+uint32_t LiGetRepcFeatureFlags(void) {
+    return RepcFeaturesEnabled;
 }
 
 const char* LiGetLaunchUrlQueryParameters(void) {

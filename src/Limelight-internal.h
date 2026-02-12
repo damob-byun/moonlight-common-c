@@ -7,6 +7,7 @@
 #include "PlatformCrypto.h"
 #include "Video.h"
 #include "Input.h"
+#include "RepcProtocol.h"
 #include "RtpAudioQueue.h"
 #include "RtpVideoQueue.h"
 #include "ByteBuffer.h"
@@ -43,6 +44,7 @@ extern SS_PING VideoPingPayload;
 extern uint32_t ControlConnectData;
 
 extern uint32_t SunshineFeatureFlags;
+extern uint32_t RepcFeaturesEnabled;
 
 // Encryption flags shared by Sunshine and Moonlight in RTSP
 #define SS_ENC_CONTROL_V2 0x01
@@ -55,7 +57,7 @@ extern uint32_t EncryptionFeaturesEnabled;
 
 // ENet channel ID values
 #define CTRL_CHANNEL_GENERIC      0x00
-#define CTRL_CHANNEL_URGENT       0x01 // IDR, LTR ACK and RFI
+#define CTRL_CHANNEL_URGENT       0x01 // IDR and reference frame invalidation requests
 #define CTRL_CHANNEL_KEYBOARD     0x02
 #define CTRL_CHANNEL_MOUSE        0x03
 #define CTRL_CHANNEL_PEN          0x04
@@ -88,6 +90,31 @@ extern uint32_t EncryptionFeaturesEnabled;
 #define ML_FF_FEC_STATUS 0x01 // Client sends SS_FRAME_FEC_STATUS for frame losses
 #define ML_FF_SESSION_ID_V1 0x02 // Client supports X-SS-Ping-Payload and X-SS-Connect-Data
 
+// RePc Protocol Extensions - Feature flags are defined in Limelight.h (public API)
+// REPC_FF_ADAPTIVE_BITRATE  0x04
+// REPC_FF_AUDIO_STATE       0x08
+// REPC_FF_CURSOR_STREAMING  0x10
+// REPC_FF_LOW_LATENCY_INPUT 0x20
+
+// RePc Protocol Extensions - Control stream message types
+#define SS_BITRATE_REQUEST_PTYPE  0x5505 // Client -> Server: bitrate change request
+#define SS_BITRATE_ACK_PTYPE      0x5506 // Server -> Client: bitrate change acknowledgement
+#define SS_AUDIO_STATE_PTYPE      0x5507 // Server -> Client: audio state change
+#define SS_CURSOR_POSITION_PTYPE  0x5508 // Server -> Client: cursor position update
+#define SS_CURSOR_SHAPE_PTYPE     0x5509 // Server -> Client: cursor shape change
+
+// RePc Protocol Version
+#define REPC_PROTOCOL_VERSION 1
+
+// Audio state values for SS_AUDIO_STATE
+#define REPC_AUDIO_STATE_SILENT 0
+#define REPC_AUDIO_STATE_ACTIVE 1
+
+// Bitrate request reason codes
+#define REPC_BITRATE_REASON_CONGESTION   0
+#define REPC_BITRATE_REASON_PACKET_LOSS  1
+#define REPC_BITRATE_REASON_RECOVERY     2
+
 #define UDP_RECV_POLL_TIMEOUT_MS 100
 
 // At this value or above, we will request high quality audio unless CAPABILITY_SLOW_OPUS_DECODER
@@ -119,12 +146,13 @@ int startControlStream(void);
 int stopControlStream(void);
 void destroyControlStream(void);
 void connectionDetectedFrameLoss(uint32_t startFrame, uint32_t endFrame);
-void connectionReceivedCompleteFrame(uint32_t frameIndex, bool frameIsLTR);
+void connectionReceivedCompleteFrame(uint32_t frameIndex);
 void connectionSawFrame(uint32_t frameIndex);
 void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus);
 int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t channelId, uint32_t flags, bool moreData);
 void flushInputOnControlStream(void);
 bool isControlDataInTransit(void);
+int sendBitrateRequestOnControlStream(int bitrateKbps, int reason, int lossPercent, int rttMs);
 
 int performRtspHandshake(PSERVER_INFORMATION serverInfo);
 

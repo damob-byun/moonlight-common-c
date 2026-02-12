@@ -31,12 +31,11 @@ typedef struct _NVCTL_ENCRYPTED_PACKET_HEADER {
     // encrypted NVCTL_ENET_PACKET_HEADER_V2 and payload data follow
 } NVCTL_ENCRYPTED_PACKET_HEADER, *PNVCTL_ENCRYPTED_PACKET_HEADER;
 
-typedef struct _QUEUED_REFERENCE_FRAME_CONTROL {
+typedef struct _QUEUED_FRAME_INVALIDATION_TUPLE {
     uint32_t startFrame;
     uint32_t endFrame;
-    bool invalidate; // true: RFI(startFrame, endFrame); false: LTR_ACK(startFrame)
     LINKED_BLOCKING_QUEUE_ENTRY entry;
-} QUEUED_REFERENCE_FRAME_CONTROL, *PQUEUED_REFERENCE_FRAME_CONTROL;
+} QUEUED_FRAME_INVALIDATION_TUPLE, *PQUEUED_FRAME_INVALIDATION_TUPLE;
 
 typedef struct _QUEUED_FRAME_FEC_STATUS {
     SS_FRAME_FEC_STATUS fecStatus;
@@ -114,7 +113,7 @@ static int lastConnectionStatusUpdate;
 static uint32_t currentEnetSequenceNumber;
 static uint64_t firstFrameTimeMs;
 
-static LINKED_BLOCKING_QUEUE referenceFrameControlQueue;
+static LINKED_BLOCKING_QUEUE invalidReferenceFrameTuples;
 static LINKED_BLOCKING_QUEUE frameFecStatusQueue;
 static LINKED_BLOCKING_QUEUE asyncCallbackQueue;
 static PLT_EVENT idrFrameRequiredEvent;
@@ -301,7 +300,7 @@ static bool supportsIdrFrameRequest;
 int initializeControlStream(void) {
     stopping = false;
     PltCreateEvent(&idrFrameRequiredEvent);
-    LbqInitializeLinkedBlockingQueue(&referenceFrameControlQueue, 20);
+    LbqInitializeLinkedBlockingQueue(&invalidReferenceFrameTuples, 20);
     LbqInitializeLinkedBlockingQueue(&frameFecStatusQueue, 8); // Limits number of frame status reports per periodic ping interval
     LbqInitializeLinkedBlockingQueue(&asyncCallbackQueue, 30);
     PltCreateMutex(&enetMutex);
@@ -376,7 +375,7 @@ void destroyControlStream(void) {
     PltDestroyCryptoContext(encryptionCtx);
     PltDestroyCryptoContext(decryptionCtx);
     PltCloseEvent(&idrFrameRequiredEvent);
-    freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&referenceFrameControlQueue));
+    freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&invalidReferenceFrameTuples));
     freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&frameFecStatusQueue));
     freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&asyncCallbackQueue));
 
@@ -387,15 +386,12 @@ static void queueFrameInvalidationTuple(uint32_t startFrame, uint32_t endFrame) 
     LC_ASSERT(startFrame <= endFrame);
 
     if (isReferenceFrameInvalidationEnabled()) {
-        PQUEUED_REFERENCE_FRAME_CONTROL qfit;
+        PQUEUED_FRAME_INVALIDATION_TUPLE qfit;
         qfit = malloc(sizeof(*qfit));
         if (qfit != NULL) {
-            *qfit = (QUEUED_REFERENCE_FRAME_CONTROL){
-                .startFrame = startFrame,
-                .endFrame = endFrame,
-                .invalidate = true,
-            };
-            if (LbqOfferQueueItem(&referenceFrameControlQueue, qfit, &qfit->entry) == LBQ_BOUND_EXCEEDED) {
+            qfit->startFrame = startFrame;
+            qfit->endFrame = endFrame;
+            if (LbqOfferQueueItem(&invalidReferenceFrameTuples, qfit, &qfit->entry) == LBQ_BOUND_EXCEEDED) {
                 // Too many invalidation tuples, so we need an IDR frame now
                 Limelog("RFI range list reached maximum size limit\n");
                 free(qfit);
@@ -415,7 +411,7 @@ static void queueFrameInvalidationTuple(uint32_t startFrame, uint32_t endFrame) 
 void LiRequestIdrFrame(void) {
     // Any reference frame invalidation requests should be dropped now.
     // We require a full IDR frame to recover.
-    freeBasicLbqList(LbqFlushQueueItems(&referenceFrameControlQueue));
+    freeBasicLbqList(LbqFlushQueueItems(&invalidReferenceFrameTuples));
 
     // Request the IDR frame
     PltSetEvent(&idrFrameRequiredEvent);
@@ -427,29 +423,9 @@ void connectionDetectedFrameLoss(uint32_t startFrame, uint32_t endFrame) {
 }
 
 // When we receive a frame, update the number of our current frame
-// and send ACK control message if the frame is LTR
-void connectionReceivedCompleteFrame(uint32_t frameIndex, bool frameIsLTR) {
+void connectionReceivedCompleteFrame(uint32_t frameIndex) {
     lastGoodFrame = frameIndex;
     intervalGoodFrameCount++;
-
-    if (frameIsLTR && IS_SUNSHINE() && isReferenceFrameInvalidationEnabled()) {
-        // Queue LTR frame ACK control message
-        PQUEUED_REFERENCE_FRAME_CONTROL qfit;
-        qfit = malloc(sizeof(*qfit));
-        if (qfit != NULL) {
-            *qfit = (QUEUED_REFERENCE_FRAME_CONTROL){
-                .startFrame = frameIndex,
-                .invalidate = false,
-            };
-            if (LbqOfferQueueItem(&referenceFrameControlQueue, qfit, &qfit->entry) == LBQ_BOUND_EXCEEDED) {
-                // This shouldn't happen and indicates that something has gone wrong with the queue
-                LC_ASSERT(false);
-                Limelog("Couldn't queue LTR ACK because the list has reached maximum size limit\n");
-                free(qfit);
-                LiRequestIdrFrame();
-            }
-        }
-    }
 }
 
 void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus) {
@@ -1083,8 +1059,12 @@ static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLe
         BbGet8(&bb, &queuedCb->data.dsAdaptiveTrigger.typeLeft);
         BbGet8(&bb, &queuedCb->data.dsAdaptiveTrigger.typeRight);
 
-        BbGetBytes(&bb, queuedCb->data.dsAdaptiveTrigger.left, DS_EFFECT_PAYLOAD_SIZE);
-        BbGetBytes(&bb, queuedCb->data.dsAdaptiveTrigger.right, DS_EFFECT_PAYLOAD_SIZE);
+        for(int i = 0; i < DS_EFFECT_PAYLOAD_SIZE; i++) {
+            BbGet8(&bb, &queuedCb->data.dsAdaptiveTrigger.left[i]);
+        }
+        for(int i = 0; i < DS_EFFECT_PAYLOAD_SIZE; i++) {
+            BbGet8(&bb, &queuedCb->data.dsAdaptiveTrigger.right[i]);
+        }
         queuedCb->typeIndex = IDX_DS_ADAPTIVE_TRIGGERS;
     }
     else {
@@ -1295,6 +1275,52 @@ static void controlReceiveThreadFunc(void* context) {
             // Process client callbacks in a separate thread
             if (needsAsyncCallback(ctlHdr->type)) {
                 queueAsyncCallback(ctlHdr, packetLength);
+            }
+            // RePc protocol extension handlers
+            else if (ctlHdr->type == SS_BITRATE_ACK_PTYPE && (RepcFeaturesEnabled & REPC_FF_ADAPTIVE_BITRATE)) {
+                if (packetLength >= (int)(sizeof(*ctlHdr) + sizeof(SS_BITRATE_ACK))) {
+                    PSS_BITRATE_ACK ack = (PSS_BITRATE_ACK)(ctlHdr + 1);
+                    uint32_t applied = BE32(ack->appliedBitrateKbps);
+                    uint32_t maxBitrate = BE32(ack->maxBitrateKbps);
+                    if (ListenerCallbacks.bitrateChanged) {
+                        ListenerCallbacks.bitrateChanged((int)applied, (int)maxBitrate);
+                    }
+                }
+            }
+            else if (ctlHdr->type == SS_AUDIO_STATE_PTYPE && (RepcFeaturesEnabled & REPC_FF_AUDIO_STATE)) {
+                if (packetLength >= (int)(sizeof(*ctlHdr) + sizeof(SS_AUDIO_STATE))) {
+                    PSS_AUDIO_STATE audioState = (PSS_AUDIO_STATE)(ctlHdr + 1);
+                    if (ListenerCallbacks.audioStateChanged) {
+                        ListenerCallbacks.audioStateChanged(audioState->state);
+                    }
+                }
+            }
+            else if (ctlHdr->type == SS_CURSOR_POSITION_PTYPE && (RepcFeaturesEnabled & REPC_FF_CURSOR_STREAMING)) {
+                if (packetLength >= (int)(sizeof(*ctlHdr) + sizeof(SS_CURSOR_POSITION))) {
+                    PSS_CURSOR_POSITION pos = (PSS_CURSOR_POSITION)(ctlHdr + 1);
+                    if (ListenerCallbacks.setCursorPosition) {
+                        ListenerCallbacks.setCursorPosition(
+                            (int)BE16(pos->x), (int)BE16(pos->y),
+                            (int)BE16(pos->screenWidth), (int)BE16(pos->screenHeight),
+                            (int)pos->visible);
+                    }
+                }
+            }
+            else if (ctlHdr->type == SS_CURSOR_SHAPE_PTYPE && (RepcFeaturesEnabled & REPC_FF_CURSOR_STREAMING)) {
+                if (packetLength >= (int)(sizeof(*ctlHdr) + sizeof(SS_CURSOR_SHAPE))) {
+                    PSS_CURSOR_SHAPE shape = (PSS_CURSOR_SHAPE)(ctlHdr + 1);
+                    uint32_t dataLen = BE32(shape->dataLength);
+                    if (packetLength >= (int)(sizeof(*ctlHdr) + sizeof(SS_CURSOR_SHAPE) + dataLen)) {
+                        const uint8_t* pixelData = (const uint8_t*)(shape + 1);
+                        if (ListenerCallbacks.setCursorShape) {
+                            ListenerCallbacks.setCursorShape(
+                                shape->shapeId, shape->type,
+                                (int)BE16(shape->width), (int)BE16(shape->height),
+                                (int)BE16(shape->hotspotX), (int)BE16(shape->hotspotY),
+                                pixelData, (int)dataLen);
+                        }
+                    }
+                }
             }
             else if (ctlHdr->type == packetTypes[IDX_TERMINATION]) {
                 BYTE_BUFFER bb;
@@ -1536,22 +1562,22 @@ static void requestIdrFrame(void) {
 }
 
 static void requestInvalidateReferenceFrames(uint32_t startFrame, uint32_t endFrame) {
+    int64_t payload[3];
+
     LC_ASSERT(startFrame <= endFrame);
     LC_ASSERT(isReferenceFrameInvalidationEnabled());
 
-    SS_RFI_REQUEST payload = {
-        .firstFrameIndex = LE32(startFrame),
-        .lastFrameIndex = LE32(endFrame),
-    };
+    payload[0] = LE64(startFrame);
+    payload[1] = LE64(endFrame);
+    payload[2] = 0;
 
     // Send the reference frame invalidation request and read the response
     if (!sendMessageAndDiscardReply(packetTypes[IDX_INVALIDATE_REF_FRAMES],
                                     sizeof(payload),
-                                    &payload,
-                                    CTRL_CHANNEL_URGENT,
+                                    payload, CTRL_CHANNEL_URGENT,
                                     ENET_PACKET_FLAG_RELIABLE,
                                     false)) {
-        Limelog("Request Invalidate Reference Frames: Transaction failed: %d\n", (int)LastSocketError());
+        Limelog("Request Invaldiate Reference Frames: Transaction failed: %d\n", (int)LastSocketError());
         ListenerCallbacks.connectionTerminated(LastSocketFail());
         return;
     }
@@ -1559,65 +1585,32 @@ static void requestInvalidateReferenceFrames(uint32_t startFrame, uint32_t endFr
     Limelog("Invalidate reference frame request sent (%d to %d)\n", startFrame, endFrame);
 }
 
-static void confirmLongtermReferenceFrame(uint32_t frameIndex) {
-    LC_ASSERT(isReferenceFrameInvalidationEnabled());
-
-    SS_LTR_FRAME_ACK payload = {
-        .frameIndex = LE32(frameIndex),
-    };
-
-    // Send LTR frame ACK and don't wait for response
-    if (!sendMessageAndForget(SS_LTR_FRAME_ACK_PTYPE,
-                              sizeof(payload),
-                              &payload,
-                              CTRL_CHANNEL_URGENT,
-                              ENET_PACKET_FLAG_RELIABLE,
-                              false)) {
-        Limelog("LTR frame ACK: Transaction failed: %d\n", (int)LastSocketError());
-        ListenerCallbacks.connectionTerminated(LastSocketFail());
-        return;
-    }
-}
-
-static void referenceFrameControlFunc(void* context) {
+static void invalidateRefFramesFunc(void* context) {
     LC_ASSERT(isReferenceFrameInvalidationEnabled());
 
     while (!PltIsThreadInterrupted(&invalidateRefFramesThread)) {
-        PQUEUED_REFERENCE_FRAME_CONTROL qfit;
-        uint32_t invalidateStartFrame;
-        uint32_t invalidateEndFrame;
-        bool invalidate = false;
+        PQUEUED_FRAME_INVALIDATION_TUPLE qfit;
+        uint32_t startFrame;
+        uint32_t endFrame;
 
-        // Wait for a reference frame control message or a request to shutdown
-        if (LbqWaitForQueueElement(&referenceFrameControlQueue, (void**)&qfit) != LBQ_SUCCESS) {
+        // Wait for a reference frame invalidation request or a request to shutdown
+        if (LbqWaitForQueueElement(&invalidReferenceFrameTuples, (void**)&qfit) != LBQ_SUCCESS) {
             // Bail if we're stopping
             return;
         }
 
-        do {
-            if (qfit->invalidate) {
-                if (!invalidate) {
-                    invalidateStartFrame = qfit->startFrame;
-                    invalidateEndFrame = qfit->endFrame;
-                    invalidate = true;
-                }
-                else {
-                    // Aggregate all lost frames into one range
-                    LC_ASSERT(qfit->endFrame >= invalidateEndFrame);
-                    invalidateEndFrame = qfit->endFrame;
-                }
-            }
-            else {
-                // Send LTR frame ACK
-                confirmLongtermReferenceFrame(qfit->startFrame);
-            }
-            free(qfit);
-        } while (LbqPollQueueElement(&referenceFrameControlQueue, (void**)&qfit) == LBQ_SUCCESS);
+        startFrame = qfit->startFrame;
+        endFrame = qfit->endFrame;
 
-        if (invalidate) {
-            // Send the reference frame invalidation request
-            requestInvalidateReferenceFrames(invalidateStartFrame, invalidateEndFrame);
-        }
+        // Aggregate all lost frames into one range
+        do {
+            LC_ASSERT(qfit->endFrame >= endFrame);
+            endFrame = qfit->endFrame;
+            free(qfit);
+        } while (LbqPollQueueElement(&invalidReferenceFrameTuples, (void**)&qfit) == LBQ_SUCCESS);
+
+        // Send the reference frame invalidation request
+        requestInvalidateReferenceFrames(startFrame, endFrame);
     }
 }
 
@@ -1631,8 +1624,8 @@ static void requestIdrFrameFunc(void* context) {
             return;
         }
 
-        // Any pending RFI requests and LTR frame ACK messages are now redundant
-        freeBasicLbqList(LbqFlushQueueItems(&referenceFrameControlQueue));
+        // Any pending reference frame invalidation requests are now redundant
+        freeBasicLbqList(LbqFlushQueueItems(&invalidReferenceFrameTuples));
 
         // Request the IDR frame
         requestIdrFrame();
@@ -1642,7 +1635,7 @@ static void requestIdrFrameFunc(void* context) {
 // Stops the control stream
 int stopControlStream(void) {
     stopping = true;
-    LbqSignalQueueShutdown(&referenceFrameControlQueue);
+    LbqSignalQueueShutdown(&invalidReferenceFrameTuples);
     LbqSignalQueueShutdown(&frameFecStatusQueue);
     LbqSignalQueueDrain(&asyncCallbackQueue);
     PltSetEvent(&idrFrameRequiredEvent);
@@ -1727,10 +1720,7 @@ bool isControlDataInTransit(void) {
 bool LiGetEstimatedRttInfo(uint32_t* estimatedRtt, uint32_t* estimatedRttVariance) {
     bool ret = false;
 
-    // We do not acquire enetMutex here because we're just reading metrics
-    // and observing a torn write every once in a while is totally fine.
-    // The peer pointer points to memory reserved inside the client object,
-    // so it's guaranteed that it will never go away underneath us.
+    PltLockMutex(&enetMutex);
     if (peer != NULL && peer->state == ENET_PEER_STATE_CONNECTED) {
         if (estimatedRtt != NULL) {
             *estimatedRtt = peer->roundTripTime;
@@ -1742,6 +1732,7 @@ bool LiGetEstimatedRttInfo(uint32_t* estimatedRtt, uint32_t* estimatedRttVarianc
 
         ret = true;
     }
+    PltUnlockMutex(&enetMutex);
 
     return ret;
 }
@@ -2029,7 +2020,7 @@ int startControlStream(void) {
 
     // Only create the reference frame invalidation thread if RFI is enabled
     if (isReferenceFrameInvalidationEnabled()) {
-        err = PltCreateThread("InvRefFrames", referenceFrameControlFunc, NULL, &invalidateRefFramesThread);
+        err = PltCreateThread("InvRefFrames", invalidateRefFramesFunc, NULL, &invalidateRefFramesThread);
         if (err != 0) {
             stopping = true;
             PltSetEvent(&idrFrameRequiredEvent);
@@ -2083,4 +2074,33 @@ bool LiGetHdrMetadata(PSS_HDR_METADATA metadata) {
 
     *metadata = hdrMetadata;
     return true;
+}
+
+// RePc: Send bitrate request to server
+int sendBitrateRequestOnControlStream(int bitrateKbps, int reason, int lossPercent, int rttMs) {
+    SS_BITRATE_REQUEST request;
+
+    if (!(RepcFeaturesEnabled & REPC_FF_ADAPTIVE_BITRATE)) {
+        return -1;
+    }
+
+    request.requestedBitrateKbps = BE32((uint32_t)bitrateKbps);
+    request.reason = (uint8_t)reason;
+    request.currentLossPercent = (uint8_t)lossPercent;
+    request.currentRttMs = BE16((uint16_t)rttMs);
+
+    if (!sendMessageAndForget(SS_BITRATE_REQUEST_PTYPE,
+                              sizeof(request),
+                              &request,
+                              CTRL_CHANNEL_GENERIC,
+                              ENET_PACKET_FLAG_RELIABLE,
+                              false)) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int LiSendBitrateRequest(int bitrateKbps, int reason, int lossPercent, int rttMs) {
+    return sendBitrateRequestOnControlStream(bitrateKbps, reason, lossPercent, rttMs);
 }

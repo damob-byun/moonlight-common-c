@@ -267,19 +267,19 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
     payloadLength = request->payloadLength;
     request->payload = NULL;
     request->payloadLength = 0;
-
+    
     // Serialize the RTSP message into a message buffer
     serializedMessage = serializeRtspMessage(request, &messageLen);
     if (serializedMessage == NULL) {
         goto Exit;
     }
-
+    
     // Create the reliable packet that describes our outgoing message
     packet = enet_packet_create(serializedMessage, messageLen, ENET_PACKET_FLAG_RELIABLE);
     if (packet == NULL) {
         goto Exit;
     }
-
+    
     // Send the message
     if (enet_peer_send(peer, 0, packet) < 0) {
         enet_packet_destroy(packet);
@@ -299,10 +299,10 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
             enet_packet_destroy(packet);
             goto Exit;
         }
-
+        
         enet_host_flush(client);
     }
-
+    
     // Wait for a reply
     if (serviceEnetHost(client, &event, RTSP_RECEIVE_TIMEOUT_SEC * 1000) <= 0 ||
         event.type != ENET_EVENT_TYPE_RECEIVE) {
@@ -343,7 +343,7 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
         offset += (int) event.packet->dataLength;
         enet_packet_destroy(event.packet);
     }
-
+        
     if (parseRtspMessage(response, responseBuffer, offset) == RTSP_ERROR_SUCCESS) {
         // Successfully parsed response
         ret = true;
@@ -477,6 +477,18 @@ static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response
     // Decrypt (if necessary) and deserialize the RTSP response
     ret = unsealRtspMessage(responseBuffer, offset, response);
 
+    // Fetch the local address for this socket if it's not populated yet
+    if (LocalAddr.ss_family == 0) {
+        SOCKADDR_LEN addrLen = (SOCKADDR_LEN)sizeof(LocalAddr);
+        if (getsockname(sock, (struct sockaddr*)&LocalAddr, &addrLen) < 0) {
+            Limelog("Failed to get local address: %d\n", LastSocketError());
+            memset(&LocalAddr, 0, sizeof(LocalAddr));
+        }
+        else {
+            LC_ASSERT(addrLen == AddrLen);
+        }
+    }
+
 Exit:
     if (serializedMessage != NULL) {
         free(serializedMessage);
@@ -571,7 +583,7 @@ static bool setupStream(PRTSP_MESSAGE response, char* target, int* error) {
         else {
             transportValue = " ";
         }
-
+        
         if (addOption(&request, "Transport", transportValue) &&
             addOption(&request, "If-Modified-Since",
                 "Thu, 01 Jan 1970 00:00:00 GMT")) {
@@ -980,21 +992,21 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             rtspClientVersion = 14;
             break;
     }
-
+    
     // Setup ENet if required by this GFE version
     if (useEnet) {
         ENetAddress address;
         ENetEvent event;
-
+        
         enet_address_set_address(&address, (struct sockaddr *)&RemoteAddr, AddrLen);
         enet_address_set_port(&address, RtspPortNumber);
-
+        
         // Create a client that can use 1 outgoing connection and 1 channel
         client = enet_host_create(RemoteAddr.ss_family, NULL, 1, 1, 0, 0);
         if (client == NULL) {
             return -1;
         }
-
+    
         // Connect to the host
         peer = enet_host_connect(client, &address, 1, 0);
         if (peer == NULL) {
@@ -1002,7 +1014,7 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             client = NULL;
             return -1;
         }
-
+    
         // Wait for the connect to complete
         if (serviceEnetHost(client, &event, RTSP_CONNECT_TIMEOUT_SEC * 1000) <= 0 ||
             event.type != ENET_EVENT_TYPE_CONNECT) {
@@ -1060,7 +1072,7 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             ret = -1;
             goto Exit;
         }
-
+        
         if ((StreamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_AV1) && strstr(response.payload, "AV1/90000")) {
             if ((serverInfo->serverCodecModeSupport & SCM_AV1_HIGH10_444) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_AV1_HIGH10_444)) {
                 NegotiatedVideoFormat = VIDEO_FORMAT_AV1_HIGH10_444;
@@ -1129,6 +1141,21 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
         EncryptionFeaturesEnabled = 0;
 
+        // Parse RePc feature flags from the server's SDP response.
+        // The server echoes back only the features it supports, so we AND with
+        // what we advertised to get the mutually supported feature set.
+        {
+            uint32_t serverRepcFeatures = 0;
+            if (parseSdpAttributeToUInt(response.payload, "x-ss-general.repcFeatures", &serverRepcFeatures)) {
+                // Intersect with features we advertised in our SDP offer
+                uint32_t clientRepcFeatures = REPC_FF_ADAPTIVE_BITRATE | REPC_FF_AUDIO_STATE |
+                                              REPC_FF_CURSOR_STREAMING | REPC_FF_LOW_LATENCY_INPUT;
+                RepcFeaturesEnabled = serverRepcFeatures & clientRepcFeatures;
+                Limelog("RePc: Negotiated features = 0x%x (server=0x%x, client=0x%x)\n",
+                        RepcFeaturesEnabled, serverRepcFeatures, clientRepcFeatures);
+            }
+        }
+
         // Parse the Opus surround parameters out of the RTSP DESCRIBE response.
         ret = parseOpusConfigurations(&response);
         if (ret != 0) {
@@ -1193,10 +1220,10 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
 
         // Given there is a non-null session id, get the
-        // first token of the session until ";", which
+        // first token of the session until ";", which 
         // resolves any 454 session not found errors on
         // standard RTSP server implementations.
-        // (i.e - sessionId = "DEADBEEFCAFE;timeout = 90")
+        // (i.e - sessionId = "DEADBEEFCAFE;timeout = 90") 
         sessionIdString = strdup(strtok_r(sessionId, ";", &strtokCtx));
         if (sessionIdString == NULL) {
             Limelog("Failed to duplicate session ID string\n");
@@ -1250,7 +1277,7 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
 
         freeMessage(&response);
     }
-
+    
     if (AppVersionQuad[0] >= 5) {
         RTSP_MESSAGE response;
         int error = -1;
@@ -1377,9 +1404,9 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
     }
 
-
+    
     ret = 0;
-
+    
 Exit:
     // Cleanup the ENet stuff
     if (useEnet) {
@@ -1387,7 +1414,7 @@ Exit:
             enet_peer_disconnect_now(peer, 0);
             peer = NULL;
         }
-
+        
         if (client != NULL) {
             enet_host_destroy(client);
             client = NULL;
