@@ -423,9 +423,10 @@ void connectionDetectedFrameLoss(uint32_t startFrame, uint32_t endFrame) {
 }
 
 // When we receive a frame, update the number of our current frame
-void connectionReceivedCompleteFrame(uint32_t frameIndex) {
+void connectionReceivedCompleteFrame(uint32_t frameIndex, bool frameIsLTR) {
     lastGoodFrame = frameIndex;
     intervalGoodFrameCount++;
+    (void)frameIsLTR;
 }
 
 void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus) {
