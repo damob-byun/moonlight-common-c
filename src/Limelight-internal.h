@@ -107,13 +107,8 @@ extern uint32_t EncryptionFeaturesEnabled;
 #define REPC_PROTOCOL_VERSION 1
 
 // Audio state values for SS_AUDIO_STATE
-#define REPC_AUDIO_STATE_SILENT 0
-#define REPC_AUDIO_STATE_ACTIVE 1
-
-// Bitrate request reason codes
-#define REPC_BITRATE_REASON_CONGESTION   0
-#define REPC_BITRATE_REASON_PACKET_LOSS  1
-#define REPC_BITRATE_REASON_RECOVERY     2
+// REPC_AUDIO_STATE_SILENT, REPC_AUDIO_STATE_ACTIVE — defined in Limelight.h
+// REPC_BITRATE_REASON_* — defined in Limelight.h
 
 #define UDP_RECV_POLL_TIMEOUT_MS 100
 

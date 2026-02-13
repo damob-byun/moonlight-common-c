@@ -154,21 +154,24 @@ typedef struct _DECODE_UNIT {
     // (happens when the frame is repeated).
     uint16_t frameHostProcessingLatency;
 
-    // Receive time of first buffer. This value uses an implementation-defined epoch,
-    // but the same epoch as enqueueTimeMs and LiGetMillis().
-    uint64_t receiveTimeMs;
+    // Receive time of first buffer in microseconds. This value uses an
+    // implementation-defined epoch, but the same epoch as enqueueTimeUs
+    // and LiGetMicroseconds().
+    uint64_t receiveTimeUs;
 
-    // Time the frame was fully assembled and queued for the video decoder to process.
-    // This is also approximately the same time as the final packet was received, so
-    // enqueueTimeMs - receiveTimeMs is the time taken to receive the frame. At the
-    // time the decode unit is passed to submitDecodeUnit(), the total queue delay
-    // can be calculated by LiGetMillis() - enqueueTimeMs.
-    uint64_t enqueueTimeMs;
+    // Time the frame was fully assembled and queued for the video decoder to process
+    // in microseconds. enqueueTimeUs - receiveTimeUs is the time taken to receive
+    // the frame. At the time the decode unit is passed to submitDecodeUnit(), the
+    // total queue delay can be calculated by LiGetMicroseconds() - enqueueTimeUs.
+    uint64_t enqueueTimeUs;
 
-    // Presentation time in milliseconds with the epoch at the first captured frame.
+    // Presentation time in microseconds with the epoch at the first captured frame.
     // This can be used to aid frame pacing or to drop old frames that were queued too
     // long prior to display.
-    unsigned int presentationTimeMs;
+    uint64_t presentationTimeUs;
+
+    // RTP timestamp of the frame
+    uint32_t rtpTimestamp;
 
     // Length of the entire buffer chain in bytes
     int fullLength;
@@ -858,6 +861,9 @@ int LiSendHighResHScrollEvent(short scrollAmount);
 // This function returns a time in milliseconds with an implementation-defined epoch.
 uint64_t LiGetMillis(void);
 
+// This function returns a time in microseconds with an implementation-defined epoch.
+uint64_t LiGetMicroseconds(void);
+
 // This is a simplistic STUN function that can assist clients in getting the WAN address
 // for machines they find using mDNS over IPv4. This can be used to pre-populate the external
 // address for streaming after GFE stopped sending it a while back. wanAddr is returned in
@@ -877,6 +883,30 @@ int LiGetPendingAudioFrames(void);
 // milliseconds rather than frames, which allows callers to be agnostic of the
 // negotiated audio frame duration.
 int LiGetPendingAudioDuration(void);
+
+// RTP statistics for audio and video streams
+typedef struct _RTP_AUDIO_STATS {
+    uint32_t packetCountAudio;
+    uint32_t packetCountFec;
+    uint32_t packetCountFecRecovered;
+    uint32_t packetCountFecFailed;
+    uint32_t packetCountOOS;
+    uint32_t packetCountInvalid;
+    uint32_t packetCountFecInvalid;
+} RTP_AUDIO_STATS, *PRTP_AUDIO_STATS;
+
+typedef struct _RTP_VIDEO_STATS {
+    uint32_t packetCountVideo;
+    uint32_t packetCountFec;
+    uint32_t packetCountFecRecovered;
+    uint32_t packetCountFecFailed;
+    uint32_t packetCountOOS;
+    uint32_t packetCountInvalid;
+    uint32_t packetCountFecInvalid;
+} RTP_VIDEO_STATS, *PRTP_VIDEO_STATS;
+
+const RTP_AUDIO_STATS* LiGetRTPAudioStats(void);
+const RTP_VIDEO_STATS* LiGetRTPVideoStats(void);
 
 // Port index flags for use with LiGetPortFromPortFlagIndex() and LiGetProtocolFromPortFlagIndex()
 #define ML_PORT_INDEX_TCP_47984 0
@@ -989,13 +1019,22 @@ uint32_t LiGetHostFeatureFlags(void);
 
 // RePc Extensions: Feature flags for capability negotiation
 #define REPC_FF_ADAPTIVE_BITRATE  0x04  // Real-time adaptive bitrate control
-#define REPC_FF_AUDIO_STATE       0x08  // Server-side audio silence detection
+#define REPC_FF_AUDIO_STATE       0x08  // Dynamic audio on/off (driver availability)
 #define REPC_FF_CURSOR_STREAMING  0x10  // Client-side cursor rendering
 #define REPC_FF_LOW_LATENCY_INPUT 0x20  // Low-latency unreliable mouse delivery
 
 // RePc Extensions: Returns the negotiated RePc feature flags (REPC_FF_* bitmask).
 // Returns 0 if the server does not support RePc extensions.
 uint32_t LiGetRepcFeatureFlags(void);
+
+// RePc Extensions: Bitrate request reason codes
+#define REPC_BITRATE_REASON_CONGESTION   0  // Network congestion detected
+#define REPC_BITRATE_REASON_PACKET_LOSS  1  // Packet loss detected
+#define REPC_BITRATE_REASON_RECOVERY     2  // Network conditions improved
+
+// RePc Extensions: Audio state values
+#define REPC_AUDIO_STATE_SILENT 0
+#define REPC_AUDIO_STATE_ACTIVE 1
 
 // RePc Extensions: Sends a bitrate change request to the server.
 // bitrateKbps: desired bitrate in Kbps
