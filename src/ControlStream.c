@@ -1278,11 +1278,12 @@ static void controlReceiveThreadFunc(void* context) {
                 queueAsyncCallback(ctlHdr, packetLength);
             }
             // RePc protocol extension handlers
-            // NOTE: Server sends V2 headers (type + payloadLength = 4 bytes).
-            // Payload starts after the full V2 header, so cast ctlHdr to V2 before +1.
+            // NOTE: After decryptControlMessageToV1(), the V2 payloadLength field is stripped.
+            // ctlHdr has V1 layout: [type(2)][payload...], so use V1 header size (2 bytes) to
+            // locate the payload. This is the same offset used by all other standard handlers.
             else if (ctlHdr->type == SS_BITRATE_ACK_PTYPE && (RepcFeaturesEnabled & REPC_FF_ADAPTIVE_BITRATE)) {
-                if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V2) + sizeof(SS_BITRATE_ACK))) {
-                    PSS_BITRATE_ACK ack = (PSS_BITRATE_ACK)((PNVCTL_ENET_PACKET_HEADER_V2)ctlHdr + 1);
+                if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V1) + sizeof(SS_BITRATE_ACK))) {
+                    PSS_BITRATE_ACK ack = (PSS_BITRATE_ACK)(ctlHdr + 1);
                     uint32_t applied = BE32(ack->appliedBitrateKbps);
                     uint32_t maxBitrate = BE32(ack->maxBitrateKbps);
                     if (ListenerCallbacks.bitrateChanged) {
@@ -1291,16 +1292,16 @@ static void controlReceiveThreadFunc(void* context) {
                 }
             }
             else if (ctlHdr->type == SS_AUDIO_STATE_PTYPE && (RepcFeaturesEnabled & REPC_FF_AUDIO_STATE)) {
-                if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V2) + sizeof(SS_AUDIO_STATE))) {
-                    PSS_AUDIO_STATE audioState = (PSS_AUDIO_STATE)((PNVCTL_ENET_PACKET_HEADER_V2)ctlHdr + 1);
+                if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V1) + sizeof(SS_AUDIO_STATE))) {
+                    PSS_AUDIO_STATE audioState = (PSS_AUDIO_STATE)(ctlHdr + 1);
                     if (ListenerCallbacks.audioStateChanged) {
                         ListenerCallbacks.audioStateChanged(audioState->state);
                     }
                 }
             }
             else if (ctlHdr->type == SS_CURSOR_POSITION_PTYPE && (RepcFeaturesEnabled & REPC_FF_CURSOR_STREAMING)) {
-                if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V2) + sizeof(SS_CURSOR_POSITION))) {
-                    PSS_CURSOR_POSITION pos = (PSS_CURSOR_POSITION)((PNVCTL_ENET_PACKET_HEADER_V2)ctlHdr + 1);
+                if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V1) + sizeof(SS_CURSOR_POSITION))) {
+                    PSS_CURSOR_POSITION pos = (PSS_CURSOR_POSITION)(ctlHdr + 1);
                     if (ListenerCallbacks.setCursorPosition) {
                         ListenerCallbacks.setCursorPosition(
                             (int)BE16(pos->x), (int)BE16(pos->y),
@@ -1310,10 +1311,10 @@ static void controlReceiveThreadFunc(void* context) {
                 }
             }
             else if (ctlHdr->type == SS_CURSOR_SHAPE_PTYPE && (RepcFeaturesEnabled & REPC_FF_CURSOR_STREAMING)) {
-                if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V2) + sizeof(SS_CURSOR_SHAPE))) {
-                    PSS_CURSOR_SHAPE shape = (PSS_CURSOR_SHAPE)((PNVCTL_ENET_PACKET_HEADER_V2)ctlHdr + 1);
+                if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V1) + sizeof(SS_CURSOR_SHAPE))) {
+                    PSS_CURSOR_SHAPE shape = (PSS_CURSOR_SHAPE)(ctlHdr + 1);
                     uint32_t dataLen = BE32(shape->dataLength);
-                    if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V2) + sizeof(SS_CURSOR_SHAPE) + dataLen)) {
+                    if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V1) + sizeof(SS_CURSOR_SHAPE) + dataLen)) {
                         const uint8_t* pixelData = (const uint8_t*)(shape + 1);
                         if (ListenerCallbacks.setCursorShape) {
                             ListenerCallbacks.setCursorShape(
