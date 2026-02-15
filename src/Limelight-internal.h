@@ -15,7 +15,7 @@
 #include <enet/enet.h>
 
 // Common globals
-extern char* RemoteAddrString;
+extern char *RemoteAddrString;
 extern struct sockaddr_storage RemoteAddr;
 extern struct sockaddr_storage LocalAddr;
 extern SOCKADDR_LEN AddrLen;
@@ -56,38 +56,38 @@ extern uint32_t EncryptionFeaturesRequested;
 extern uint32_t EncryptionFeaturesEnabled;
 
 // ENet channel ID values
-#define CTRL_CHANNEL_GENERIC      0x00
-#define CTRL_CHANNEL_URGENT       0x01 // IDR and reference frame invalidation requests
-#define CTRL_CHANNEL_KEYBOARD     0x02
-#define CTRL_CHANNEL_MOUSE        0x03
-#define CTRL_CHANNEL_PEN          0x04
-#define CTRL_CHANNEL_TOUCH        0x05
-#define CTRL_CHANNEL_UTF8         0x06
+#define CTRL_CHANNEL_GENERIC 0x00
+#define CTRL_CHANNEL_URGENT 0x01 // IDR and reference frame invalidation requests
+#define CTRL_CHANNEL_KEYBOARD 0x02
+#define CTRL_CHANNEL_MOUSE 0x03
+#define CTRL_CHANNEL_PEN 0x04
+#define CTRL_CHANNEL_TOUCH 0x05
+#define CTRL_CHANNEL_UTF8 0x06
 #define CTRL_CHANNEL_GAMEPAD_BASE 0x10 // 0x10 to 0x1F by controller index
-#define CTRL_CHANNEL_SENSOR_BASE  0x20 // 0x20 to 0x2F by controller index
-#define CTRL_CHANNEL_COUNT        0x30
+#define CTRL_CHANNEL_SENSOR_BASE 0x20  // 0x20 to 0x2F by controller index
+#define CTRL_CHANNEL_COUNT 0x30
 
 #ifndef UINT24_MAX
 #define UINT24_MAX 0xFFFFFF
 #endif
 
-#define U16(x) ((unsigned short) ((x) & UINT16_MAX))
-#define U24(x) ((unsigned int) ((x) & UINT24_MAX))
-#define U32(x) ((unsigned int) ((x) & UINT32_MAX))
+#define U16(x) ((unsigned short)((x) & UINT16_MAX))
+#define U24(x) ((unsigned int)((x) & UINT24_MAX))
+#define U32(x) ((unsigned int)((x) & UINT32_MAX))
 
-#define isBefore16(x, y) (U16((x) - (y)) > (UINT16_MAX/2))
-#define isBefore24(x, y) (U24((x) - (y)) > (UINT24_MAX/2))
-#define isBefore32(x, y) (U32((x) - (y)) > (UINT32_MAX/2))
+#define isBefore16(x, y) (U16((x) - (y)) > (UINT16_MAX / 2))
+#define isBefore24(x, y) (U24((x) - (y)) > (UINT24_MAX / 2))
+#define isBefore32(x, y) (U32((x) - (y)) > (UINT32_MAX / 2))
 
-#define APP_VERSION_AT_LEAST(a, b, c)                                                       \
-    ((AppVersionQuad[0] > (a)) ||                                                           \
-     (AppVersionQuad[0] == (a) && AppVersionQuad[1] > (b)) ||                               \
+#define APP_VERSION_AT_LEAST(a, b, c)                         \
+    ((AppVersionQuad[0] > (a)) ||                             \
+     (AppVersionQuad[0] == (a) && AppVersionQuad[1] > (b)) || \
      (AppVersionQuad[0] == (a) && AppVersionQuad[1] == (b) && AppVersionQuad[2] >= (c)))
 
 #define IS_SUNSHINE() (AppVersionQuad[3] < 0)
 
 // Client feature flags for x-ml-general.featureFlags SDP attribute
-#define ML_FF_FEC_STATUS 0x01 // Client sends SS_FRAME_FEC_STATUS for frame losses
+#define ML_FF_FEC_STATUS 0x01    // Client sends SS_FRAME_FEC_STATUS for frame losses
 #define ML_FF_SESSION_ID_V1 0x02 // Client supports X-SS-Ping-Payload and X-SS-Connect-Data
 
 // RePc Protocol Extensions - Feature flags are defined in Limelight.h (public API)
@@ -97,11 +97,12 @@ extern uint32_t EncryptionFeaturesEnabled;
 // REPC_FF_LOW_LATENCY_INPUT 0x20
 
 // RePc Protocol Extensions - Control stream message types
-#define SS_BITRATE_REQUEST_PTYPE  0x5505 // Client -> Server: bitrate change request
-#define SS_BITRATE_ACK_PTYPE      0x5506 // Server -> Client: bitrate change acknowledgement
-#define SS_AUDIO_STATE_PTYPE      0x5507 // Server -> Client: audio state change
-#define SS_CURSOR_POSITION_PTYPE  0x5508 // Server -> Client: cursor position update
-#define SS_CURSOR_SHAPE_PTYPE     0x5509 // Server -> Client: cursor shape change
+#define SS_BITRATE_REQUEST_PTYPE 0x5505 // Client -> Server: bitrate change request
+#define SS_BITRATE_ACK_PTYPE 0x5506     // Server -> Client: bitrate change acknowledgement
+#define SS_AUDIO_STATE_PTYPE 0x5507     // Server -> Client: audio state change
+#define SS_CURSOR_POSITION_PTYPE 0x5508 // Server -> Client: cursor position update
+#define SS_CURSOR_SHAPE_PTYPE 0x5509    // Server -> Client: cursor shape change
+#define CS_MOUSE_MODE_PTYPE 0x550A      // Client -> Server: mouse mode change
 
 // RePc Protocol Version
 #define REPC_PROTOCOL_VERSION 1
@@ -123,18 +124,18 @@ extern uint32_t EncryptionFeaturesEnabled;
 // Internal macro for checking the magic byte of the audio configuration value
 #define MAGIC_BYTE_FROM_AUDIO_CONFIG(x) ((x) & 0xFF)
 
-int serviceEnetHost(ENetHost* client, ENetEvent* event, enet_uint32 timeoutMs);
-int gracefullyDisconnectEnetPeer(ENetHost* host, ENetPeer* peer, enet_uint32 lingerTimeoutMs);
-int extractVersionQuadFromString(const char* string, int* quad);
+int serviceEnetHost(ENetHost *client, ENetEvent *event, enet_uint32 timeoutMs);
+int gracefullyDisconnectEnetPeer(ENetHost *host, ENetPeer *peer, enet_uint32 lingerTimeoutMs);
+int extractVersionQuadFromString(const char *string, int *quad);
 bool isReferenceFrameInvalidationSupportedByDecoder(void);
 bool isReferenceFrameInvalidationEnabled(void);
-void* extendBuffer(void* ptr, size_t newSize);
+void *extendBuffer(void *ptr, size_t newSize);
 
-void fixupMissingCallbacks(PDECODER_RENDERER_CALLBACKS* drCallbacks, PAUDIO_RENDERER_CALLBACKS* arCallbacks,
-    PCONNECTION_LISTENER_CALLBACKS* clCallbacks);
+void fixupMissingCallbacks(PDECODER_RENDERER_CALLBACKS *drCallbacks, PAUDIO_RENDERER_CALLBACKS *arCallbacks,
+                           PCONNECTION_LISTENER_CALLBACKS *clCallbacks);
 void setRecorderCallbacks(PDECODER_RENDERER_CALLBACKS drCallbacks, PAUDIO_RENDERER_CALLBACKS arCallbacks);
 
-char* getSdpPayloadForStreamConfig(int rtspClientVersion, int* length);
+char *getSdpPayloadForStreamConfig(int rtspClientVersion, int *length);
 
 int initializeControlStream(void);
 int startControlStream(void);
@@ -144,10 +145,11 @@ void connectionDetectedFrameLoss(uint32_t startFrame, uint32_t endFrame);
 void connectionReceivedCompleteFrame(uint32_t frameIndex, bool frameIsLTR);
 void connectionSawFrame(uint32_t frameIndex);
 void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus);
-int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t channelId, uint32_t flags, bool moreData);
+int sendInputPacketOnControlStream(unsigned char *data, int length, uint8_t channelId, uint32_t flags, bool moreData);
 void flushInputOnControlStream(void);
 bool isControlDataInTransit(void);
 int sendBitrateRequestOnControlStream(int bitrateKbps, int reason, int lossPercent, int rttMs);
+int sendMouseModeOnControlStream(int absoluteMode);
 
 int performRtspHandshake(PSERVER_INFORMATION serverInfo);
 
@@ -161,13 +163,13 @@ void notifyFrameLost(unsigned int frameNumber, bool speculative);
 void initializeVideoStream(void);
 void destroyVideoStream(void);
 void notifyKeyFrameReceived(void);
-int startVideoStream(void* rendererContext, int drFlags);
+int startVideoStream(void *rendererContext, int drFlags);
 void stopVideoStream(void);
 
 int initializeAudioStream(void);
 int notifyAudioPortNegotiationComplete(void);
 void destroyAudioStream(void);
-int startAudioStream(void* audioContext, int arFlags);
+int startAudioStream(void *audioContext, int arFlags);
 void stopAudioStream(void);
 
 int initializeInputStream(void);
