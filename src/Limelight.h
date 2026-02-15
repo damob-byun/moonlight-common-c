@@ -102,11 +102,6 @@ extern "C"
         // in /launch and /resume requests.
         char remoteInputAesKey[16];
         char remoteInputAesIv[16];
-
-        // Optional RePc feature bitmask to advertise during RTSP negotiation.
-        // If zero, moonlight-common-c uses its default feature set.
-        // See REPC_FF_* constants below.
-        uint32_t repcFeatureFlags;
     } STREAM_CONFIGURATION, *PSTREAM_CONFIGURATION;
 
     // Use this function to zero the stream configuration when allocated on the stack or heap
@@ -1054,6 +1049,14 @@ extern "C"
 #define REPC_AUDIO_STATE_SILENT 0
 #define REPC_AUDIO_STATE_ACTIVE 1
 
+    // RePc Extensions: Runtime mouse mode update packet (Client -> Server)
+    // absoluteMode: 1=absolute (cursor streaming), 0=relative
+    typedef struct _CS_MOUSE_MODE
+    {
+        uint8_t absoluteMode;
+        uint8_t reserved[3];
+    } CS_MOUSE_MODE, *PCS_MOUSE_MODE;
+
     // RePc Extensions: Sends a bitrate change request to the server.
     // bitrateKbps: desired bitrate in Kbps
     // reason: REPC_BITRATE_REASON_* value
@@ -1061,6 +1064,11 @@ extern "C"
     // rttMs: current observed RTT in milliseconds
     // Returns 0 on success, negative on error, or LI_ERR_UNSUPPORTED if not supported.
     int LiSendBitrateRequest(int bitrateKbps, int reason, int lossPercent, int rttMs);
+
+    // RePc Extensions: Notifies server when mouse mode changes at runtime.
+    // absoluteMode: 1=absolute mode, 0=relative mode
+    // Returns 0 on success, negative on error, or LI_ERR_UNSUPPORTED if not supported.
+    int LiSendMouseMode(int absoluteMode);
 
     // RePc Extensions: Set mouse input batching interval in milliseconds.
     // Lower values = less latency but more packets. Default is 1ms.

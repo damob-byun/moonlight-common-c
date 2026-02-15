@@ -2376,14 +2376,13 @@ int LiSendBitrateRequest(int bitrateKbps, int reason, int lossPercent, int rttMs
     return sendBitrateRequestOnControlStream(bitrateKbps, reason, lossPercent, rttMs);
 }
 
-// RePc: Send mouse mode change notification to server
 int sendMouseModeOnControlStream(int absoluteMode)
 {
     CS_MOUSE_MODE packet;
 
     if (!(RepcFeaturesEnabled & REPC_FF_CURSOR_STREAMING))
     {
-        return -1; // Cursor streaming not negotiated
+        return -1;
     }
 
     packet.absoluteMode = (uint8_t)absoluteMode;
@@ -2402,4 +2401,9 @@ int sendMouseModeOnControlStream(int absoluteMode)
     }
 
     return 0;
+}
+
+int LiSendMouseMode(int absoluteMode)
+{
+    return sendMouseModeOnControlStream(absoluteMode);
 }
