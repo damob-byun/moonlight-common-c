@@ -102,6 +102,11 @@ extern "C"
         // in /launch and /resume requests.
         char remoteInputAesKey[16];
         char remoteInputAesIv[16];
+
+        // Optional RePc feature bitmask to advertise during RTSP negotiation.
+        // If zero, moonlight-common-c uses its default feature set.
+        // See REPC_FF_* constants below.
+        uint32_t repcFeatureFlags;
     } STREAM_CONFIGURATION, *PSTREAM_CONFIGURATION;
 
     // Use this function to zero the stream configuration when allocated on the stack or heap
