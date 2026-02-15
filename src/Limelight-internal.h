@@ -147,7 +147,7 @@ void connectionSawFrame(uint32_t frameIndex);
 void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus);
 int sendInputPacketOnControlStream(unsigned char *data, int length, uint8_t channelId, uint32_t flags, bool moreData);
 void flushInputOnControlStream(void);
-bool isControlData InTransit(void);
+bool isControlDataInTransit(void);
 int sendBitrateRequestOnControlStream(int bitrateKbps, int reason, int lossPercent, int rttMs);
 int sendMouseModeOnControlStream(int absoluteMode);
 
