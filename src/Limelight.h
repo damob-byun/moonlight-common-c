@@ -505,6 +505,10 @@ extern "C"
 
     // RePc Extensions: This callback is invoked when the server sends a new cursor shape.
     // pixelData contains RGBA pixel data. pixelDataLen is in bytes.
+    // Called when the remote side sends clipboard text. text is UTF-8, NOT null-terminated.
+    // textLen is the byte count. Called on the control stream thread.
+    typedef void (*ConnListenerSetClipboardText)(const char *text, int textLen);
+
     typedef void (*ConnListenerSetCursorShape)(int shapeId, int type, int width, int height,
                                                int hotspotX, int hotspotY,
                                                const uint8_t *pixelData, int pixelDataLen);
@@ -530,6 +534,7 @@ extern "C"
         ConnListenerAudioStateChanged audioStateChanged;
         ConnListenerSetCursorPosition setCursorPosition;
         ConnListenerSetCursorShape setCursorShape;
+        ConnListenerSetClipboardText setClipboardText;
     } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
 
     // Use this function to zero the connection callbacks when allocated on the stack or heap
@@ -1040,6 +1045,7 @@ extern "C"
 #define REPC_FF_AUDIO_STATE 0x08       // Dynamic audio on/off (driver availability)
 #define REPC_FF_CURSOR_STREAMING 0x10  // Client-side cursor rendering
 #define REPC_FF_LOW_LATENCY_INPUT 0x20 // Low-latency unreliable mouse delivery
+#define REPC_FF_CLIPBOARD 0x40         // Bidirectional clipboard sharing
 
     // RePc Extensions: Returns the negotiated RePc feature flags (REPC_FF_* bitmask).
     // Returns 0 if the server does not support RePc extensions.
@@ -1074,6 +1080,12 @@ extern "C"
     // absoluteMode: 1=absolute mode, 0=relative mode
     // Returns 0 on success, negative on error, or LI_ERR_UNSUPPORTED if not supported.
     int LiSendMouseMode(int absoluteMode);
+
+    // RePc Extensions: Sends clipboard text to the server.
+    // text: UTF-8 text (does not need to be null-terminated)
+    // textLen: byte count of text
+    // Returns 0 on success, negative on error, or LI_ERR_UNSUPPORTED if not supported.
+    int LiSendClipboardText(const char *text, int textLen);
 
     // RePc Extensions: Set mouse input batching interval in milliseconds.
     // Lower values = less latency but more packets. Default is 1ms.

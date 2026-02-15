@@ -95,6 +95,7 @@ extern uint32_t EncryptionFeaturesEnabled;
 // REPC_FF_AUDIO_STATE       0x08
 // REPC_FF_CURSOR_STREAMING  0x10
 // REPC_FF_LOW_LATENCY_INPUT 0x20
+// REPC_FF_CLIPBOARD         0x40
 
 // RePc Protocol Extensions - Control stream message types
 #define SS_BITRATE_REQUEST_PTYPE 0x5505 // Client -> Server: bitrate change request
@@ -103,6 +104,8 @@ extern uint32_t EncryptionFeaturesEnabled;
 #define SS_CURSOR_POSITION_PTYPE 0x5508 // Server -> Client: cursor position update
 #define SS_CURSOR_SHAPE_PTYPE 0x5509    // Server -> Client: cursor shape change
 #define CS_MOUSE_MODE_PTYPE 0x550A      // Client -> Server: mouse mode change
+#define CS_CLIPBOARD_PTYPE 0x550B       // Client -> Server: clipboard text
+#define SS_CLIPBOARD_PTYPE 0x550C       // Server -> Client: clipboard text
 
 // RePc Protocol Version
 #define REPC_PROTOCOL_VERSION 1

@@ -1485,6 +1485,22 @@ static void controlReceiveThreadFunc(void *context)
                     }
                 }
             }
+            else if (ctlHdr->type == SS_CLIPBOARD_PTYPE && (RepcFeaturesEnabled & REPC_FF_CLIPBOARD))
+            {
+                if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V1) + sizeof(SS_CLIPBOARD)))
+                {
+                    PSS_CLIPBOARD clip = (PSS_CLIPBOARD)(ctlHdr + 1);
+                    uint32_t textLen = BE32(clip->textLength);
+                    if (packetLength >= (int)(sizeof(NVCTL_ENET_PACKET_HEADER_V1) + sizeof(SS_CLIPBOARD) + textLen))
+                    {
+                        const char *text = (const char *)(clip + 1);
+                        if (ListenerCallbacks.setClipboardText)
+                        {
+                            ListenerCallbacks.setClipboardText(text, (int)textLen);
+                        }
+                    }
+                }
+            }
             else if (ctlHdr->type == packetTypes[IDX_TERMINATION])
             {
                 BYTE_BUFFER bb;
@@ -2406,4 +2422,46 @@ int sendMouseModeOnControlStream(int absoluteMode)
 int LiSendMouseMode(int absoluteMode)
 {
     return sendMouseModeOnControlStream(absoluteMode);
+}
+
+// RePc: Send clipboard text to server
+int LiSendClipboardText(const char *text, int textLen)
+{
+    if (!(RepcFeaturesEnabled & REPC_FF_CLIPBOARD))
+    {
+        return -1;
+    }
+
+    if (text == NULL || textLen < 0 || textLen > 1024 * 1024)
+    {
+        return -1;
+    }
+
+    // Allocate header + text buffer on the heap (variable length)
+    int payloadSize = (int)sizeof(SS_CLIPBOARD) + textLen;
+    PSS_CLIPBOARD packet = (PSS_CLIPBOARD)malloc(payloadSize);
+    if (packet == NULL)
+    {
+        return -1;
+    }
+
+    packet->textLength = BE32((uint32_t)textLen);
+    if (textLen > 0)
+    {
+        memcpy(packet + 1, text, textLen);
+    }
+
+    if (!sendMessageAndForget(CS_CLIPBOARD_PTYPE,
+                              (short)payloadSize,
+                              packet,
+                              CTRL_CHANNEL_GENERIC,
+                              ENET_PACKET_FLAG_RELIABLE,
+                              false))
+    {
+        free(packet);
+        return -1;
+    }
+
+    free(packet);
+    return 0;
 }

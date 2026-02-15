@@ -67,6 +67,16 @@ typedef struct _SS_CURSOR_SHAPE
 #define REPC_CURSOR_TYPE_MONOCHROME 1
 #define REPC_CURSOR_TYPE_MASKED 2
 
+// Clipboard transfer packet (bidirectional: Server <-> Client)
+// Sent when clipboard content changes. Followed by variable-length UTF-8 text.
+// Client->Server uses CS_CLIPBOARD_PTYPE (0x550B)
+// Server->Client uses SS_CLIPBOARD_PTYPE (0x550C)
+typedef struct _SS_CLIPBOARD
+{
+    uint32_t textLength; // BE: length of following UTF-8 text in bytes (0 = clear clipboard)
+    // Followed by: uint8_t text[textLength]
+} REPC_PACKED SS_CLIPBOARD, *PSS_CLIPBOARD;
+
 #ifdef _WIN32
 #pragma pack(pop)
 #endif
