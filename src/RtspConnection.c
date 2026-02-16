@@ -1147,10 +1147,8 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         {
             uint32_t serverRepcFeatures = 0;
             if (parseSdpAttributeToUInt(response.payload, "x-ss-general.repcFeatures", &serverRepcFeatures)) {
-                // Intersect with features we advertised in our SDP offer
-                uint32_t clientRepcFeatures = REPC_FF_ADAPTIVE_BITRATE | REPC_FF_AUDIO_STATE |
-                                              REPC_FF_CURSOR_STREAMING | REPC_FF_LOW_LATENCY_INPUT;
-                RepcFeaturesEnabled = serverRepcFeatures & clientRepcFeatures;
+                // Intersect server-supported features with what we advertised in our SDP offer
+                RepcFeaturesEnabled = serverRepcFeatures & StreamConfig.repcFeatureFlags;
                 Limelog("RePc: Negotiated features = 0x%x (server=0x%x, client=0x%x)\n",
                         RepcFeaturesEnabled, serverRepcFeatures, clientRepcFeatures);
             }
