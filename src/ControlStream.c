@@ -722,12 +722,13 @@ static bool isPacketSentWaitingForAck(ENetPacket *packet)
     return false;
 }
 
-static bool sendMessageEnet(short ptype, short paylen, const void *payload, uint8_t channelId, uint32_t flags, bool moreData)
+static bool sendMessageEnet(short ptype, int paylen, const void *payload, uint8_t channelId, uint32_t flags, bool moreData)
 {
     ENetPacket *enetPacket;
     int err;
 
     LC_ASSERT(AppVersionQuad[0] >= 5);
+    LC_ASSERT(paylen >= 0 && paylen <= 65535);
 
     // Only send reliable packets to GFE
     if (!IS_SUNSHINE())
@@ -739,13 +740,34 @@ static bool sendMessageEnet(short ptype, short paylen, const void *payload, uint
     {
         PNVCTL_ENCRYPTED_PACKET_HEADER encPacket;
         PNVCTL_ENET_PACKET_HEADER_V2 packet;
-        char tempBuffer[256];
+
+        // Use a stack buffer for small payloads; fall back to heap for large ones
+        // (the old fixed 256-byte stack buffer would assert/crash on large payloads)
+        char stackBuffer[256];
+        char *plainBuf;
+        bool heapAlloc = false;
+        int plainSize = (int)(sizeof(*packet) + paylen);
+
+        if (plainSize <= (int)sizeof(stackBuffer))
+        {
+            plainBuf = stackBuffer;
+        }
+        else
+        {
+            plainBuf = (char *)malloc(plainSize);
+            if (plainBuf == NULL)
+            {
+                return false;
+            }
+            heapAlloc = true;
+        }
 
         enetPacket = enet_packet_create(NULL,
                                         sizeof(*encPacket) + AES_GCM_TAG_LENGTH + sizeof(*packet) + paylen,
                                         flags);
         if (enetPacket == NULL)
         {
+            if (heapAlloc) free(plainBuf);
             return false;
         }
 
@@ -759,20 +781,22 @@ static bool sendMessageEnet(short ptype, short paylen, const void *payload, uint
         encPacket->seq = currentEnetSequenceNumber++;
 
         // Construct the plaintext data for encryption
-        LC_ASSERT(sizeof(*packet) + paylen < sizeof(tempBuffer));
-        packet = (PNVCTL_ENET_PACKET_HEADER_V2)tempBuffer;
+        packet = (PNVCTL_ENET_PACKET_HEADER_V2)plainBuf;
         packet->type = ptype;
-        packet->payloadLength = paylen;
+        packet->payloadLength = (unsigned short)paylen;
         memcpy(&packet[1], payload, paylen);
 
         // Encrypt the data into the final packet (and byteswap for BE machines)
         if (!encryptControlMessage(encPacket, packet))
         {
             Limelog("Failed to encrypt control stream message\n");
+            if (heapAlloc) free(plainBuf);
             enet_packet_destroy(enetPacket);
             PltUnlockMutex(&enetMutex);
             return false;
         }
+
+        if (heapAlloc) free(plainBuf);
 
         // enetMutex still locked here
     }
@@ -903,7 +927,7 @@ static bool sendMessageAndForget(short ptype, short paylen, const void *payload,
     // threads at once. We have to synchronize them with a lock.
     if (AppVersionQuad[0] >= 5)
     {
-        ret = sendMessageEnet(ptype, paylen, payload, channelId, flags, moreData);
+        ret = sendMessageEnet(ptype, (int)paylen, payload, channelId, flags, moreData);
     }
     else
     {
@@ -911,6 +935,28 @@ static bool sendMessageAndForget(short ptype, short paylen, const void *payload,
     }
 
     return ret;
+}
+
+// Same as sendMessageAndForget but accepts int paylen for large payloads (e.g. clipboard).
+// TCP path rejects payloads over 32767 bytes (NVCTL_TCP header uses short).
+static bool sendLargeMessageAndForget(short ptype, int paylen, const void *payload, uint8_t channelId, uint32_t flags, bool moreData)
+{
+    LC_ASSERT(paylen >= 0 && paylen <= 65535);
+
+    if (AppVersionQuad[0] >= 5)
+    {
+        return sendMessageEnet(ptype, paylen, payload, channelId, flags, moreData);
+    }
+    else
+    {
+        // TCP control stream uses short for payloadLength — clamp to avoid truncation
+        if (paylen > 32767)
+        {
+            Limelog("sendLargeMessageAndForget: payload too large for TCP control stream (%d bytes)\n", paylen);
+            return false;
+        }
+        return sendMessageTcp(ptype, (short)paylen, payload);
+    }
 }
 
 static bool sendMessageAndDiscardReply(short ptype, short paylen, const void *payload, uint8_t channelId, uint32_t flags, bool moreData)
@@ -2432,7 +2478,9 @@ int LiSendClipboardText(const char *text, int textLen)
         return -1;
     }
 
-    if (text == NULL || textLen < 0 || textLen > 1024 * 1024)
+    // Payload = 4-byte header + text. ENet/NVCTL packet payloadLength is unsigned short → max 65535.
+    // Leave room for the SS_CLIPBOARD header (4 bytes).
+    if (text == NULL || textLen < 0 || textLen > (int)(65535 - sizeof(SS_CLIPBOARD)))
     {
         return -1;
     }
@@ -2451,12 +2499,12 @@ int LiSendClipboardText(const char *text, int textLen)
         memcpy(packet + 1, text, textLen);
     }
 
-    if (!sendMessageAndForget(CS_CLIPBOARD_PTYPE,
-                              (short)payloadSize,
-                              packet,
-                              CTRL_CHANNEL_GENERIC,
-                              ENET_PACKET_FLAG_RELIABLE,
-                              false))
+    if (!sendLargeMessageAndForget(CS_CLIPBOARD_PTYPE,
+                                   payloadSize,
+                                   packet,
+                                   CTRL_CHANNEL_GENERIC,
+                                   ENET_PACKET_FLAG_RELIABLE,
+                                   false))
     {
         free(packet);
         return -1;
