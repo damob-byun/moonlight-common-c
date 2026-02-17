@@ -1547,6 +1547,13 @@ static void controlReceiveThreadFunc(void *context)
                     }
                 }
             }
+            else if (ctlHdr->type == SS_AUDIO_RECONNECT_PTYPE && (RepcFeaturesEnabled & REPC_FF_AUDIO_STATE))
+            {
+                if (ListenerCallbacks.reconnectAudio)
+                {
+                    ListenerCallbacks.reconnectAudio();
+                }
+            }
             else if (ctlHdr->type == packetTypes[IDX_TERMINATION])
             {
                 BYTE_BUFFER bb;

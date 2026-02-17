@@ -509,6 +509,10 @@ extern "C"
     // textLen is the byte count. Called on the control stream thread.
     typedef void (*ConnListenerSetClipboardText)(const char *text, int textLen);
 
+    // Called when the server requests the client to reconnect the audio stream.
+    // Called on the control stream thread - must not call LiRestartAudioStream() directly.
+    typedef void (*ConnListenerReconnectAudio)(void);
+
     typedef void (*ConnListenerSetCursorShape)(int shapeId, int type, int width, int height,
                                                int hotspotX, int hotspotY,
                                                const uint8_t *pixelData, int pixelDataLen);
@@ -535,6 +539,7 @@ extern "C"
         ConnListenerSetCursorPosition setCursorPosition;
         ConnListenerSetCursorShape setCursorShape;
         ConnListenerSetClipboardText setClipboardText;
+        ConnListenerReconnectAudio reconnectAudio;
     } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
 
     // Use this function to zero the connection callbacks when allocated on the stack or heap
@@ -593,6 +598,12 @@ extern "C"
 
     // This function stops streaming. This function is not thread-safe.
     void LiStopConnection(void);
+
+    // Restarts the audio stream (UDP socket + threads + renderer) without tearing down
+    // the full connection. Useful to recover from audio driver changes or renderer failures.
+    // Must be called from outside the audio decoder/playback thread.
+    // Returns 0 on success, negative on failure.
+    int LiRestartAudioStream(void);
 
     // This function interrupts a pending LiStartConnection() call. This interruption happens asynchronously
     // so it is not safe to start another connection before the first LiStartConnection() call returns.

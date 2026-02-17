@@ -106,6 +106,7 @@ extern uint32_t EncryptionFeaturesEnabled;
 #define CS_MOUSE_MODE_PTYPE 0x550A      // Client -> Server: mouse mode change
 #define CS_CLIPBOARD_PTYPE 0x550B       // Client -> Server: clipboard text
 #define SS_CLIPBOARD_PTYPE 0x550C       // Server -> Client: clipboard text
+#define SS_AUDIO_RECONNECT_PTYPE 0x550D // Server -> Client: request audio stream reconnect (REPC_FF_AUDIO_STATE)
 
 // RePc Protocol Version
 #define REPC_PROTOCOL_VERSION 1

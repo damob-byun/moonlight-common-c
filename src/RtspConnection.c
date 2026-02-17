@@ -7,12 +7,12 @@
 
 static int currentSeqNumber;
 static char rtspTargetUrl[256];
-static char *sessionIdString;
+static char* sessionIdString;
 static bool hasSessionId;
 static int rtspClientVersion;
 static char urlAddr[URLSAFESTRING_LEN];
 static bool useEnet;
-static char *controlStreamId;
+static char* controlStreamId;
 static bool encryptedRtspEnabled;
 
 static PPLT_CRYPTO_CONTEXT encryptionCtx;
@@ -20,31 +20,28 @@ static PPLT_CRYPTO_CONTEXT decryptionCtx;
 static uint32_t encryptionSequenceNumber;
 
 static SOCKET sock = INVALID_SOCKET;
-static ENetHost *client;
-static ENetPeer *peer;
+static ENetHost* client;
+static ENetPeer* peer;
 
 #define CHAR_TO_INT(x) ((x) - '0')
 #define CHAR_IS_DIGIT(x) ((x) >= '0' && (x) <= '9')
 
 // Create RTSP Option
-static POPTION_ITEM createOptionItem(char *option, char *content)
+static POPTION_ITEM createOptionItem(char* option, char* content)
 {
     POPTION_ITEM item = malloc(sizeof(*item));
-    if (item == NULL)
-    {
+    if (item == NULL) {
         return NULL;
     }
 
     item->option = strdup(option);
-    if (item->option == NULL)
-    {
+    if (item->option == NULL) {
         free(item);
         return NULL;
     }
 
     item->content = strdup(content);
-    if (item->content == NULL)
-    {
+    if (item->content == NULL) {
         free(item->option);
         free(item);
         return NULL;
@@ -57,11 +54,10 @@ static POPTION_ITEM createOptionItem(char *option, char *content)
 }
 
 // Add an option to the RTSP Message
-static bool addOption(PRTSP_MESSAGE msg, char *option, char *content)
+static bool addOption(PRTSP_MESSAGE msg, char* option, char* content)
 {
     POPTION_ITEM item = createOptionItem(option, content);
-    if (item == NULL)
-    {
+    if (item == NULL) {
         return false;
     }
 
@@ -72,21 +68,20 @@ static bool addOption(PRTSP_MESSAGE msg, char *option, char *content)
 }
 
 // Create an RTSP Request
-static bool initializeRtspRequest(PRTSP_MESSAGE msg, char *command, char *target)
+static bool initializeRtspRequest(PRTSP_MESSAGE msg, char* command, char* target)
 {
     char sequenceNumberStr[16];
     char clientVersionStr[16];
 
     // FIXME: Hacked CSeq attribute due to RTSP parser bug
     createRtspRequest(msg, NULL, 0, command, target, "RTSP/1.0",
-                      0, NULL, NULL, 0);
+        0, NULL, NULL, 0);
 
     snprintf(sequenceNumberStr, sizeof(sequenceNumberStr), "%d", currentSeqNumber++);
     snprintf(clientVersionStr, sizeof(clientVersionStr), "%d", rtspClientVersion);
     if (!addOption(msg, "CSeq", sequenceNumberStr) ||
         !addOption(msg, "X-GS-ClientVersion", clientVersionStr) ||
-        (!useEnet && !addOption(msg, "Host", urlAddr)))
-    {
+        (!useEnet && !addOption(msg, "Host", urlAddr))) {
         freeMessage(msg);
         return false;
     }
@@ -96,35 +91,30 @@ static bool initializeRtspRequest(PRTSP_MESSAGE msg, char *command, char *target
 
 #define ENCRYPTED_RTSP_BIT 0x80000000
 
-typedef struct _ENC_RTSP_HEADER
-{
-    uint32_t typeAndLength;  // BE
+typedef struct _ENC_RTSP_HEADER {
+    uint32_t typeAndLength; // BE
     uint32_t sequenceNumber; // BE
     uint8_t tag[16];
 } ENC_RTSP_HEADER, *PENC_RTSP_HEADER;
 
-static char *sealRtspMessage(PRTSP_MESSAGE request, int *messageLen)
-{
-    char *serializedMessage;
+static char* sealRtspMessage(PRTSP_MESSAGE request, int* messageLen) {
+    char* serializedMessage;
     PENC_RTSP_HEADER encryptedMessage;
     int plaintextLen;
     bool success;
-    uint8_t iv[12] = {0};
+    uint8_t iv[12] = { 0 };
 
     serializedMessage = serializeRtspMessage(request, &plaintextLen);
-    if (serializedMessage == NULL)
-    {
+    if (serializedMessage == NULL) {
         return NULL;
     }
-    else if (!encryptedRtspEnabled)
-    {
+    else if (!encryptedRtspEnabled) {
         *messageLen = plaintextLen;
         return serializedMessage;
     }
 
     encryptedMessage = (PENC_RTSP_HEADER)malloc(sizeof(ENC_RTSP_HEADER) + plaintextLen);
-    if (encryptedMessage == NULL)
-    {
+    if (encryptedMessage == NULL) {
         free(serializedMessage);
         return NULL;
     }
@@ -144,15 +134,14 @@ static char *sealRtspMessage(PRTSP_MESSAGE request, int *messageLen)
     encryptedMessage->sequenceNumber = BE32(encryptionSequenceNumber);
 
     success = PltEncryptMessage(encryptionCtx, ALGORITHM_AES_GCM, 0,
-                                (uint8_t *)StreamConfig.remoteInputAesKey, sizeof(StreamConfig.remoteInputAesKey),
+                                (uint8_t*)StreamConfig.remoteInputAesKey, sizeof(StreamConfig.remoteInputAesKey),
                                 iv, sizeof(iv),
                                 encryptedMessage->tag, sizeof(encryptedMessage->tag),
-                                (uint8_t *)serializedMessage, plaintextLen,
-                                (uint8_t *)(encryptedMessage + 1), messageLen);
+                                (uint8_t*)serializedMessage, plaintextLen,
+                                (uint8_t*)(encryptedMessage + 1), messageLen);
     free(serializedMessage);
 
-    if (!success)
-    {
+    if (!success) {
         free(encryptedMessage);
         return NULL;
     }
@@ -160,32 +149,28 @@ static char *sealRtspMessage(PRTSP_MESSAGE request, int *messageLen)
     // The size returned from PltEncryptMessage() is the payload only
     *messageLen += sizeof(ENC_RTSP_HEADER);
 
-    return (char *)encryptedMessage;
+    return (char*)encryptedMessage;
 }
 
-static bool unsealRtspMessage(char *rawMessage, int rawMessageLen, PRTSP_MESSAGE response)
-{
-    char *decryptedMessage;
+static bool unsealRtspMessage(char* rawMessage, int rawMessageLen, PRTSP_MESSAGE response) {
+    char* decryptedMessage;
     int decryptedMessageLen;
     bool success;
 
     // If the server just closed the connection without responding with anything,
     // there's no point in proceeding any further trying to parse it.
-    if (rawMessageLen == 0)
-    {
+    if (rawMessageLen == 0) {
         return false;
     }
 
-    if (encryptedRtspEnabled)
-    {
+    if (encryptedRtspEnabled) {
         PENC_RTSP_HEADER encryptedMessage;
         uint32_t seq;
         uint32_t typeAndLen;
         uint32_t len;
-        uint8_t iv[12] = {0};
+        uint8_t iv[12] = { 0 };
 
-        if (rawMessageLen <= (int)sizeof(ENC_RTSP_HEADER))
-        {
+        if (rawMessageLen <= (int)sizeof(ENC_RTSP_HEADER)) {
             Limelog("RTSP encrypted header too small\n");
             return false;
         }
@@ -193,20 +178,17 @@ static bool unsealRtspMessage(char *rawMessage, int rawMessageLen, PRTSP_MESSAGE
         encryptedMessage = (PENC_RTSP_HEADER)rawMessage;
         typeAndLen = BE32(encryptedMessage->typeAndLength);
 
-        if (!(typeAndLen & ENCRYPTED_RTSP_BIT))
-        {
+        if (!(typeAndLen & ENCRYPTED_RTSP_BIT)) {
             Limelog("Rejecting unencrypted RTSP message\n");
             return false;
         }
 
         len = typeAndLen & ~ENCRYPTED_RTSP_BIT;
-        if (len + sizeof(ENC_RTSP_HEADER) > (uint32_t)rawMessageLen)
-        {
+        if (len + sizeof(ENC_RTSP_HEADER) > (uint32_t)rawMessageLen) {
             Limelog("Rejecting partial encrypted RTSP message\n");
             return false;
         }
-        else if (len + sizeof(ENC_RTSP_HEADER) < (uint32_t)rawMessageLen)
-        {
+        else if (len + sizeof(ENC_RTSP_HEADER) < (uint32_t)rawMessageLen) {
             Limelog("Rejecting encrypted RTSP message with excess data\n");
             return false;
         }
@@ -223,43 +205,37 @@ static bool unsealRtspMessage(char *rawMessage, int rawMessageLen, PRTSP_MESSAGE
         iv[11] = (uint8_t)'R'; // RTSP stream
 
         decryptedMessageLen = rawMessageLen - sizeof(ENC_RTSP_HEADER);
-        decryptedMessage = (char *)malloc(decryptedMessageLen);
-        if (decryptedMessage == NULL)
-        {
+        decryptedMessage = (char*)malloc(decryptedMessageLen);
+        if (decryptedMessage == NULL) {
             return false;
         }
 
         success = PltDecryptMessage(decryptionCtx, ALGORITHM_AES_GCM, 0,
-                                    (uint8_t *)StreamConfig.remoteInputAesKey, sizeof(StreamConfig.remoteInputAesKey),
+                                    (uint8_t*)StreamConfig.remoteInputAesKey, sizeof(StreamConfig.remoteInputAesKey),
                                     iv, sizeof(iv),
                                     encryptedMessage->tag, sizeof(encryptedMessage->tag),
-                                    (uint8_t *)(encryptedMessage + 1), decryptedMessageLen,
-                                    (uint8_t *)decryptedMessage, &decryptedMessageLen);
-        if (!success)
-        {
+                                    (uint8_t*)(encryptedMessage + 1), decryptedMessageLen,
+                                    (uint8_t*)decryptedMessage, &decryptedMessageLen);
+        if (!success) {
             Limelog("Failed to decrypt RTSP response\n");
             free(decryptedMessage);
             return false;
         }
     }
-    else
-    {
+    else {
         decryptedMessage = rawMessage;
         decryptedMessageLen = rawMessageLen;
     }
 
-    if (parseRtspMessage(response, decryptedMessage, decryptedMessageLen) == RTSP_ERROR_SUCCESS)
-    {
+    if (parseRtspMessage(response, decryptedMessage, decryptedMessageLen) == RTSP_ERROR_SUCCESS) {
         success = true;
     }
-    else
-    {
+    else {
         Limelog("Failed to parse RTSP response\n");
         success = false;
     }
 
-    if (decryptedMessage != rawMessage)
-    {
+    if (decryptedMessage != rawMessage) {
         free(decryptedMessage);
     }
 
@@ -267,17 +243,16 @@ static bool unsealRtspMessage(char *rawMessage, int rawMessageLen, PRTSP_MESSAGE
 }
 
 // Send RTSP message and get response over ENet
-static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE response, bool expectingPayload, int *error)
-{
+static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE response, bool expectingPayload, int* error) {
     ENetEvent event;
-    char *serializedMessage;
+    char* serializedMessage;
     int messageLen;
     int offset;
-    ENetPacket *packet;
-    char *payload;
+    ENetPacket* packet;
+    char* payload;
     int payloadLength;
     bool ret;
-    char *responseBuffer;
+    char* responseBuffer;
 
     // RTSP encryption is not supported using ENet due to our special handling
     // of the payload below. Modern versions of Sunshine use TCP for RTSP.
@@ -292,59 +267,51 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
     payloadLength = request->payloadLength;
     request->payload = NULL;
     request->payloadLength = 0;
-
+    
     // Serialize the RTSP message into a message buffer
     serializedMessage = serializeRtspMessage(request, &messageLen);
-    if (serializedMessage == NULL)
-    {
+    if (serializedMessage == NULL) {
         goto Exit;
     }
-
+    
     // Create the reliable packet that describes our outgoing message
     packet = enet_packet_create(serializedMessage, messageLen, ENET_PACKET_FLAG_RELIABLE);
-    if (packet == NULL)
-    {
+    if (packet == NULL) {
         goto Exit;
     }
-
+    
     // Send the message
-    if (enet_peer_send(peer, 0, packet) < 0)
-    {
+    if (enet_peer_send(peer, 0, packet) < 0) {
         enet_packet_destroy(packet);
         goto Exit;
     }
     enet_host_flush(client);
 
     // If we have a payload to send, we'll need to send that separately
-    if (payload != NULL)
-    {
+    if (payload != NULL) {
         packet = enet_packet_create(payload, payloadLength, ENET_PACKET_FLAG_RELIABLE);
-        if (packet == NULL)
-        {
+        if (packet == NULL) {
             goto Exit;
         }
 
         // Send the payload
-        if (enet_peer_send(peer, 0, packet) < 0)
-        {
+        if (enet_peer_send(peer, 0, packet) < 0) {
             enet_packet_destroy(packet);
             goto Exit;
         }
-
+        
         enet_host_flush(client);
     }
-
+    
     // Wait for a reply
     if (serviceEnetHost(client, &event, RTSP_RECEIVE_TIMEOUT_SEC * 1000) <= 0 ||
-        event.type != ENET_EVENT_TYPE_RECEIVE)
-    {
+        event.type != ENET_EVENT_TYPE_RECEIVE) {
         Limelog("Failed to receive RTSP reply: %d\n", LastSocketFail());
         goto Exit;
     }
 
     responseBuffer = malloc(event.packet->dataLength);
-    if (responseBuffer == NULL)
-    {
+    if (responseBuffer == NULL) {
         Limelog("Failed to allocate RTSP response buffer\n");
         enet_packet_destroy(event.packet);
         goto Exit;
@@ -352,23 +319,20 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
 
     // Copy the data out and destroy the packet
     memcpy(responseBuffer, event.packet->data, event.packet->dataLength);
-    offset = (int)event.packet->dataLength;
+    offset = (int) event.packet->dataLength;
     enet_packet_destroy(event.packet);
 
     // Wait for the payload if we're expecting some
-    if (expectingPayload)
-    {
+    if (expectingPayload) {
         // The payload comes in a second packet
         if (serviceEnetHost(client, &event, RTSP_RECEIVE_TIMEOUT_SEC * 1000) <= 0 ||
-            event.type != ENET_EVENT_TYPE_RECEIVE)
-        {
+            event.type != ENET_EVENT_TYPE_RECEIVE) {
             Limelog("Failed to receive RTSP reply payload: %d\n", LastSocketFail());
             goto Exit;
         }
 
         responseBuffer = extendBuffer(responseBuffer, event.packet->dataLength + offset);
-        if (responseBuffer == NULL)
-        {
+        if (responseBuffer == NULL) {
             Limelog("Failed to extend RTSP response buffer\n");
             enet_packet_destroy(event.packet);
             goto Exit;
@@ -376,17 +340,15 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
 
         // Copy the payload out to the end of the response buffer and destroy the packet
         memcpy(&responseBuffer[offset], event.packet->data, event.packet->dataLength);
-        offset += (int)event.packet->dataLength;
+        offset += (int) event.packet->dataLength;
         enet_packet_destroy(event.packet);
     }
-
-    if (parseRtspMessage(response, responseBuffer, offset) == RTSP_ERROR_SUCCESS)
-    {
+        
+    if (parseRtspMessage(response, responseBuffer, offset) == RTSP_ERROR_SUCCESS) {
         // Successfully parsed response
         ret = true;
     }
-    else
-    {
+    else {
         Limelog("Failed to parse RTSP response\n");
     }
 
@@ -396,14 +358,12 @@ Exit:
     request->payloadLength = payloadLength;
 
     // Free the serialized buffer
-    if (serializedMessage != NULL)
-    {
+    if (serializedMessage != NULL) {
         free(serializedMessage);
     }
 
     // Free the response buffer
-    if (responseBuffer != NULL)
-    {
+    if (responseBuffer != NULL) {
         free(responseBuffer);
     }
 
@@ -411,14 +371,13 @@ Exit:
 }
 
 // Send RTSP message and get response over TCP
-static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response, int *error)
-{
+static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response, int* error) {
     SOCK_RET err;
     bool ret;
     int offset;
-    char *serializedMessage = NULL;
+    char* serializedMessage = NULL;
     int messageLen;
-    char *responseBuffer;
+    char* responseBuffer;
     int responseBufferSize;
     int connectRetries;
 
@@ -431,37 +390,30 @@ static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response
     // This can happen with GFE 3.22 when initially launching a session because it
     // returns HTTP 200 OK for the /launch request before the RTSP handshake port
     // is listening.
-    do
-    {
+    do {
         sock = connectTcpSocket(&RemoteAddr, AddrLen, RtspPortNumber, RTSP_CONNECT_TIMEOUT_SEC);
-        if (sock == INVALID_SOCKET)
-        {
+        if (sock == INVALID_SOCKET) {
             *error = LastSocketError();
-            if (*error == ECONNREFUSED)
-            {
+            if (*error == ECONNREFUSED) {
                 // Try again after 500 ms on ECONNREFUSED
                 PltSleepMs(RTSP_RETRY_DELAY_MS);
             }
-            else
-            {
+            else {
                 // Fail if we get some other error
                 break;
             }
         }
-        else
-        {
+        else {
             // We successfully connected
             break;
         }
     } while (connectRetries++ < (RTSP_CONNECT_TIMEOUT_SEC * 1000) / RTSP_RETRY_DELAY_MS && !ConnectionInterrupted);
-    if (sock == INVALID_SOCKET)
-    {
+    if (sock == INVALID_SOCKET) {
         return ret;
     }
 
     serializedMessage = sealRtspMessage(request, &messageLen);
-    if (serializedMessage == NULL)
-    {
+    if (serializedMessage == NULL) {
         closeSocket(sock);
         sock = INVALID_SOCKET;
         return ret;
@@ -471,8 +423,7 @@ static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response
     // enableNoDelay() must have been called for sendMtuSafe() to work.
     enableNoDelay(sock);
     err = sendMtuSafe(sock, serializedMessage, messageLen);
-    if (err == SOCKET_ERROR)
-    {
+    if (err == SOCKET_ERROR) {
         *error = LastSocketError();
         Limelog("Failed to send RTSP message: %d\n", *error);
         goto Exit;
@@ -481,16 +432,13 @@ static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response
     // Read the response until the server closes the connection
     offset = 0;
     responseBufferSize = 0;
-    for (;;)
-    {
+    for (;;) {
         struct pollfd pfd;
 
-        if (offset >= responseBufferSize)
-        {
+        if (offset >= responseBufferSize) {
             responseBufferSize = offset + 16384;
             responseBuffer = extendBuffer(responseBuffer, responseBufferSize);
-            if (responseBuffer == NULL)
-            {
+            if (responseBuffer == NULL) {
                 Limelog("Failed to allocate RTSP response buffer\n");
                 goto Exit;
             }
@@ -499,34 +447,29 @@ static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response
         pfd.fd = sock;
         pfd.events = POLLIN;
         err = pollSockets(&pfd, 1, RTSP_RECEIVE_TIMEOUT_SEC * 1000);
-        if (err == 0)
-        {
+        if (err == 0) {
             *error = ETIMEDOUT;
             Limelog("RTSP request timed out\n");
             goto Exit;
         }
-        else if (err < 0)
-        {
+        else if (err < 0) {
             *error = LastSocketError();
             Limelog("Failed to wait for RTSP response: %d\n", *error);
             goto Exit;
         }
 
         err = recv(sock, &responseBuffer[offset], responseBufferSize - offset, 0);
-        if (err < 0)
-        {
+        if (err < 0) {
             // Error reading
             *error = LastSocketError();
             Limelog("Failed to read RTSP response: %d\n", *error);
             goto Exit;
         }
-        else if (err == 0)
-        {
+        else if (err == 0) {
             // Done reading
             break;
         }
-        else
-        {
+        else {
             offset += err;
         }
     }
@@ -535,28 +478,23 @@ static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response
     ret = unsealRtspMessage(responseBuffer, offset, response);
 
     // Fetch the local address for this socket if it's not populated yet
-    if (LocalAddr.ss_family == 0)
-    {
+    if (LocalAddr.ss_family == 0) {
         SOCKADDR_LEN addrLen = (SOCKADDR_LEN)sizeof(LocalAddr);
-        if (getsockname(sock, (struct sockaddr *)&LocalAddr, &addrLen) < 0)
-        {
+        if (getsockname(sock, (struct sockaddr*)&LocalAddr, &addrLen) < 0) {
             Limelog("Failed to get local address: %d\n", LastSocketError());
             memset(&LocalAddr, 0, sizeof(LocalAddr));
         }
-        else
-        {
+        else {
             LC_ASSERT(addrLen == AddrLen);
         }
     }
 
 Exit:
-    if (serializedMessage != NULL)
-    {
+    if (serializedMessage != NULL) {
         free(serializedMessage);
     }
 
-    if (responseBuffer != NULL)
-    {
+    if (responseBuffer != NULL) {
         free(responseBuffer);
     }
 
@@ -565,35 +503,29 @@ Exit:
     return ret;
 }
 
-static bool transactRtspMessage(PRTSP_MESSAGE request, PRTSP_MESSAGE response, bool expectingPayload, int *error)
-{
-    if (ConnectionInterrupted)
-    {
+static bool transactRtspMessage(PRTSP_MESSAGE request, PRTSP_MESSAGE response, bool expectingPayload, int* error) {
+    if (ConnectionInterrupted) {
         *error = -1;
         return false;
     }
 
-    if (useEnet)
-    {
+    if (useEnet) {
         return transactRtspMessageEnet(request, response, expectingPayload, error);
     }
-    else
-    {
+    else {
         return transactRtspMessageTcp(request, response, error);
     }
 }
 
 // Send RTSP OPTIONS request
-static bool requestOptions(PRTSP_MESSAGE response, int *error)
-{
+static bool requestOptions(PRTSP_MESSAGE response, int* error) {
     RTSP_MESSAGE request;
     bool ret;
 
     *error = -1;
 
     ret = initializeRtspRequest(&request, "OPTIONS", rtspTargetUrl);
-    if (ret)
-    {
+    if (ret) {
         ret = transactRtspMessage(&request, response, false, error);
         freeMessage(&request);
     }
@@ -602,25 +534,21 @@ static bool requestOptions(PRTSP_MESSAGE response, int *error)
 }
 
 // Send RTSP DESCRIBE request
-static bool requestDescribe(PRTSP_MESSAGE response, int *error)
-{
+static bool requestDescribe(PRTSP_MESSAGE response, int* error) {
     RTSP_MESSAGE request;
     bool ret;
 
     *error = -1;
 
     ret = initializeRtspRequest(&request, "DESCRIBE", rtspTargetUrl);
-    if (ret)
-    {
+    if (ret) {
         if (addOption(&request, "Accept",
-                      "application/sdp") &&
+            "application/sdp") &&
             addOption(&request, "If-Modified-Since",
-                      "Thu, 01 Jan 1970 00:00:00 GMT"))
-        {
+                "Thu, 01 Jan 1970 00:00:00 GMT")) {
             ret = transactRtspMessage(&request, response, true, error);
         }
-        else
-        {
+        else {
             ret = false;
         }
         freeMessage(&request);
@@ -630,46 +558,38 @@ static bool requestDescribe(PRTSP_MESSAGE response, int *error)
 }
 
 // Send RTSP SETUP request
-static bool setupStream(PRTSP_MESSAGE response, char *target, int *error)
-{
+static bool setupStream(PRTSP_MESSAGE response, char* target, int* error) {
     RTSP_MESSAGE request;
     bool ret;
-    char *transportValue;
+    char* transportValue;
 
     *error = -1;
 
     ret = initializeRtspRequest(&request, "SETUP", target);
-    if (ret)
-    {
-        if (hasSessionId)
-        {
-            if (!addOption(&request, "Session", sessionIdString))
-            {
+    if (ret) {
+        if (hasSessionId) {
+            if (!addOption(&request, "Session", sessionIdString)) {
                 ret = false;
                 goto FreeMessage;
             }
         }
 
-        if (AppVersionQuad[0] >= 6)
-        {
+        if (AppVersionQuad[0] >= 6) {
             // It looks like GFE doesn't care what we say our port is but
             // we need to give it some port to successfully complete the
             // handshake process.
             transportValue = "unicast;X-GS-ClientPort=50000-50001";
         }
-        else
-        {
+        else {
             transportValue = " ";
         }
-
+        
         if (addOption(&request, "Transport", transportValue) &&
             addOption(&request, "If-Modified-Since",
-                      "Thu, 01 Jan 1970 00:00:00 GMT"))
-        {
+                "Thu, 01 Jan 1970 00:00:00 GMT")) {
             ret = transactRtspMessage(&request, response, false, error);
         }
-        else
-        {
+        else {
             ret = false;
         }
 
@@ -681,22 +601,18 @@ static bool setupStream(PRTSP_MESSAGE response, char *target, int *error)
 }
 
 // Send RTSP PLAY request
-static bool playStream(PRTSP_MESSAGE response, char *target, int *error)
-{
+static bool playStream(PRTSP_MESSAGE response, char* target, int* error) {
     RTSP_MESSAGE request;
     bool ret;
 
     *error = -1;
 
     ret = initializeRtspRequest(&request, "PLAY", target);
-    if (ret != 0)
-    {
-        if (addOption(&request, "Session", sessionIdString))
-        {
+    if (ret != 0) {
+        if (addOption(&request, "Session", sessionIdString)) {
             ret = transactRtspMessage(&request, response, false, error);
         }
-        else
-        {
+        else {
             ret = false;
         }
         freeMessage(&request);
@@ -706,8 +622,7 @@ static bool playStream(PRTSP_MESSAGE response, char *target, int *error)
 }
 
 // Send RTSP ANNOUNCE message
-static bool sendVideoAnnounce(PRTSP_MESSAGE response, int *error)
-{
+static bool sendVideoAnnounce(PRTSP_MESSAGE response, int* error) {
     RTSP_MESSAGE request;
     bool ret;
     int payloadLength;
@@ -717,27 +632,23 @@ static bool sendVideoAnnounce(PRTSP_MESSAGE response, int *error)
 
     ret = initializeRtspRequest(&request, "ANNOUNCE",
                                 APP_VERSION_AT_LEAST(7, 1, 431) ? controlStreamId : "streamid=video");
-    if (ret)
-    {
+    if (ret) {
         ret = false;
 
         if (!addOption(&request, "Session", sessionIdString) ||
-            !addOption(&request, "Content-type", "application/sdp"))
-        {
+            !addOption(&request, "Content-type", "application/sdp")) {
             goto FreeMessage;
         }
 
         request.payload = getSdpPayloadForStreamConfig(rtspClientVersion, &payloadLength);
-        if (request.payload == NULL)
-        {
+        if (request.payload == NULL) {
             goto FreeMessage;
         }
         request.flags |= FLAG_ALLOCATED_PAYLOAD;
         request.payloadLength = payloadLength;
 
         snprintf(payloadLengthStr, sizeof(payloadLengthStr), "%d", payloadLength);
-        if (!addOption(&request, "Content-length", payloadLengthStr))
-        {
+        if (!addOption(&request, "Content-length", payloadLengthStr)) {
             goto FreeMessage;
         }
 
@@ -750,12 +661,10 @@ static bool sendVideoAnnounce(PRTSP_MESSAGE response, int *error)
     return ret;
 }
 
-static int parseOpusConfigFromParamString(char *paramStr, int channelCount, POPUS_MULTISTREAM_CONFIGURATION opusConfig)
-{
+static int parseOpusConfigFromParamString(char* paramStr, int channelCount, POPUS_MULTISTREAM_CONFIGURATION opusConfig) {
     int i;
 
-    if (channelCount > AUDIO_CONFIGURATION_MAX_CHANNEL_COUNT)
-    {
+    if (channelCount > AUDIO_CONFIGURATION_MAX_CHANNEL_COUNT) {
         Limelog("Invalid channel count: %d\n", channelCount);
         return -1;
     }
@@ -764,26 +673,22 @@ static int parseOpusConfigFromParamString(char *paramStr, int channelCount, POPU
     opusConfig->channelCount = channelCount;
 
     // Parse the remaining data from the surround-params value
-    if (!CHAR_IS_DIGIT(*paramStr))
-    {
+    if (!CHAR_IS_DIGIT(*paramStr)) {
         Limelog("Invalid stream count: %c\n", *paramStr);
         return -1;
     }
     opusConfig->streams = CHAR_TO_INT(*paramStr);
     paramStr++;
 
-    if (!CHAR_IS_DIGIT(*paramStr))
-    {
+    if (!CHAR_IS_DIGIT(*paramStr)) {
         Limelog("Invalid coupled stream count: %c\n", *paramStr);
         return -2;
     }
     opusConfig->coupledStreams = CHAR_TO_INT(*paramStr);
     paramStr++;
 
-    for (i = 0; i < opusConfig->channelCount; i++)
-    {
-        if (!CHAR_IS_DIGIT(*paramStr))
-        {
+    for (i = 0; i < opusConfig->channelCount; i++) {
+        if (!CHAR_IS_DIGIT(*paramStr)) {
             Limelog("Invalid mapping value at %d: %c\n", i, *paramStr);
             return -3;
         }
@@ -797,21 +702,18 @@ static int parseOpusConfigFromParamString(char *paramStr, int channelCount, POPU
 
 // Parse the server port from the Transport header
 // Example: unicast;server_port=48000-48001;source=192.168.35.177
-static bool parseServerPortFromTransport(PRTSP_MESSAGE response, uint16_t *port)
-{
-    char *transport;
-    char *portStart;
+static bool parseServerPortFromTransport(PRTSP_MESSAGE response, uint16_t* port) {
+    char* transport;
+    char* portStart;
 
     transport = getOptionContent(response->options, "Transport");
-    if (transport == NULL)
-    {
+    if (transport == NULL) {
         return false;
     }
 
     // Look for the server_port= entry in the Transport option
     portStart = strstr(transport, "server_port=");
-    if (portStart == NULL)
-    {
+    if (portStart == NULL) {
         return false;
     }
 
@@ -820,8 +722,7 @@ static bool parseServerPortFromTransport(PRTSP_MESSAGE response, uint16_t *port)
 
     // Validate the port number
     long int rawPort = strtol(portStart, NULL, 10);
-    if (rawPort <= 0 || rawPort > 65535)
-    {
+    if (rawPort <= 0 || rawPort > 65535) {
         return false;
     }
 
@@ -830,8 +731,7 @@ static bool parseServerPortFromTransport(PRTSP_MESSAGE response, uint16_t *port)
 }
 
 // Parses the Opus configuration from an RTSP DESCRIBE response
-static int parseOpusConfigurations(PRTSP_MESSAGE response)
-{
+static int parseOpusConfigurations(PRTSP_MESSAGE response) {
     HighQualitySurroundSupported = false;
     memset(&NormalQualityOpusConfig, 0, sizeof(NormalQualityOpusConfig));
     memset(&HighQualityOpusConfig, 0, sizeof(HighQualityOpusConfig));
@@ -840,18 +740,16 @@ static int parseOpusConfigurations(PRTSP_MESSAGE response)
     HighQualityOpusConfig.sampleRate = NormalQualityOpusConfig.sampleRate = 48000;
 
     // Stereo doesn't have any surround-params elements in the RTSP data
-    if (CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration) == 2)
-    {
+    if (CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration) == 2) {
         NormalQualityOpusConfig.channelCount = 2;
         NormalQualityOpusConfig.streams = 1;
         NormalQualityOpusConfig.coupledStreams = 1;
         NormalQualityOpusConfig.mapping[0] = 0;
         NormalQualityOpusConfig.mapping[1] = 1;
     }
-    else
-    {
+    else {
         char paramsPrefix[128];
-        char *paramStart;
+        char* paramStart;
         int err;
         int channelCount;
 
@@ -860,15 +758,13 @@ static int parseOpusConfigurations(PRTSP_MESSAGE response)
         // Find the correct audio parameter value
         snprintf(paramsPrefix, sizeof(paramsPrefix), "a=fmtp:97 surround-params=%d", channelCount);
         paramStart = strstr(response->payload, paramsPrefix);
-        if (paramStart)
-        {
+        if (paramStart) {
             // Skip the prefix
             paramStart += strlen(paramsPrefix);
 
             // Parse the normal quality Opus config
             err = parseOpusConfigFromParamString(paramStart, channelCount, &NormalQualityOpusConfig);
-            if (err != 0)
-            {
+            if (err != 0) {
                 LC_ASSERT(err == 0);
                 return err;
             }
@@ -876,8 +772,7 @@ static int parseOpusConfigurations(PRTSP_MESSAGE response)
             // GFE's normal-quality channel mapping differs from the one our clients use.
             // They use FL FR C RL RR SL SR LFE, but we use FL FR C LFE RL RR SL SR. We'll need
             // to swap the mappings to match the expected values.
-            if (channelCount == 6 || channelCount == 8)
-            {
+            if (channelCount == 6 || channelCount == 8) {
                 OPUS_MULTISTREAM_CONFIGURATION originalMapping = NormalQualityOpusConfig;
 
                 // LFE comes after C
@@ -892,15 +787,13 @@ static int parseOpusConfigurations(PRTSP_MESSAGE response)
             // If this configuration is compatible with high quality mode, we may have another
             // matching surround-params value for high quality mode.
             paramStart = strstr(paramStart, paramsPrefix);
-            if (paramStart)
-            {
+            if (paramStart) {
                 // Skip the prefix
                 paramStart += strlen(paramsPrefix);
 
                 // Parse the high quality Opus config
                 err = parseOpusConfigFromParamString(paramStart, channelCount, &HighQualityOpusConfig);
-                if (err != 0)
-                {
+                if (err != 0) {
                     LC_ASSERT(err == 0);
                     return err;
                 }
@@ -909,8 +802,7 @@ static int parseOpusConfigurations(PRTSP_MESSAGE response)
                 HighQualitySurroundSupported = true;
             }
         }
-        else
-        {
+        else {
             Limelog("No surround parameters found for channel count: %d\n", channelCount);
 
             // It's unknown whether all GFE versions that supported surround sound included these
@@ -920,8 +812,7 @@ static int parseOpusConfigurations(PRTSP_MESSAGE response)
             // It is not necessary to provide HighQualityOpusConfig here because high quality mode
             // can only be enabled from seeing the required "surround-params=" value, so there's no
             // chance it could regress from implementing this parser.
-            if (channelCount == 6)
-            {
+            if (channelCount == 6) {
                 NormalQualityOpusConfig.channelCount = 6;
                 NormalQualityOpusConfig.streams = 4;
                 NormalQualityOpusConfig.coupledStreams = 2;
@@ -932,8 +823,7 @@ static int parseOpusConfigurations(PRTSP_MESSAGE response)
                 NormalQualityOpusConfig.mapping[4] = 2;
                 NormalQualityOpusConfig.mapping[5] = 3;
             }
-            else
-            {
+            else {
                 // We don't have a hardcoded fallback mapping, so we have no choice but to fail.
                 return -4;
             }
@@ -943,18 +833,16 @@ static int parseOpusConfigurations(PRTSP_MESSAGE response)
     return 0;
 }
 
-static bool parseUrlAddrFromRtspUrlString(const char *rtspUrlString, char *destination, size_t destinationLength)
-{
-    char *rtspUrlScratchBuffer;
-    char *portSeparator;
-    char *v6EscapeEndChar;
-    char *urlPathSeparator;
+static bool parseUrlAddrFromRtspUrlString(const char* rtspUrlString, char* destination, size_t destinationLength) {
+    char* rtspUrlScratchBuffer;
+    char* portSeparator;
+    char* v6EscapeEndChar;
+    char* urlPathSeparator;
     int prefixLen;
 
     // Create a copy that we can modify
     rtspUrlScratchBuffer = strdup(rtspUrlString);
-    if (rtspUrlScratchBuffer == NULL)
-    {
+    if (rtspUrlScratchBuffer == NULL) {
         return false;
     }
 
@@ -964,12 +852,10 @@ static bool parseUrlAddrFromRtspUrlString(const char *rtspUrlString, char *desti
     v6EscapeEndChar = strchr(rtspUrlScratchBuffer, ']');
 
     // Count the prefix length to skip past the initial rtsp:// or rtspru:// part
-    for (prefixLen = 2; rtspUrlScratchBuffer[prefixLen - 2] != 0 && (rtspUrlScratchBuffer[prefixLen - 2] != '/' || rtspUrlScratchBuffer[prefixLen - 1] != '/'); prefixLen++)
-        ;
+    for (prefixLen = 2; rtspUrlScratchBuffer[prefixLen - 2] != 0 && (rtspUrlScratchBuffer[prefixLen - 2] != '/' || rtspUrlScratchBuffer[prefixLen - 1] != '/'); prefixLen++);
 
     // If we hit the end of the string prior to parsing the prefix, we cannot proceed
-    if (rtspUrlScratchBuffer[prefixLen - 2] == 0)
-    {
+    if (rtspUrlScratchBuffer[prefixLen - 2] == 0) {
         free(rtspUrlScratchBuffer);
         return false;
     }
@@ -978,24 +864,20 @@ static bool parseUrlAddrFromRtspUrlString(const char *rtspUrlString, char *desti
     urlPathSeparator = strchr(rtspUrlScratchBuffer + prefixLen, '/');
 
     // Check for a v6 address first since they also have colons
-    if (v6EscapeEndChar)
-    {
+    if (v6EscapeEndChar) {
         // Terminate the string at the next character
         *(v6EscapeEndChar + 1) = 0;
     }
-    else if (portSeparator)
-    {
+    else if (portSeparator) {
         // Terminate the string prior to the port separator
         *portSeparator = 0;
     }
-    else if (urlPathSeparator)
-    {
+    else if (urlPathSeparator) {
         // Terminate the string prior to the path separator
         *urlPathSeparator = 0;
     }
 
-    if (!PltSafeStrcpy(destination, destinationLength, rtspUrlScratchBuffer + prefixLen))
-    {
+    if (!PltSafeStrcpy(destination, destinationLength, rtspUrlScratchBuffer + prefixLen)) {
         free(rtspUrlScratchBuffer);
         return false;
     }
@@ -1006,19 +888,16 @@ static bool parseUrlAddrFromRtspUrlString(const char *rtspUrlString, char *desti
 
 // SDP attributes are in the form:
 // a=x-nv-bwe.bwuSafeZoneLowLimit:70\r\n
-bool parseSdpAttributeToUInt(const char *payload, const char *name, unsigned int *val)
-{
+bool parseSdpAttributeToUInt(const char* payload, const char* name, unsigned int* val) {
     // Find the entry for the specified attribute name
-    char *attribute = strstr(payload, name);
-    if (!attribute)
-    {
+    char* attribute = strstr(payload, name);
+    if (!attribute) {
         return false;
     }
 
     // Locate the start of the value
-    char *valst = strstr(attribute, ":");
-    if (!valst)
-    {
+    char* valst = strstr(attribute, ":");
+    if (!valst) {
         return false;
     }
 
@@ -1028,19 +907,16 @@ bool parseSdpAttributeToUInt(const char *payload, const char *name, unsigned int
     return true;
 }
 
-bool parseSdpAttributeToInt(const char *payload, const char *name, int *val)
-{
+bool parseSdpAttributeToInt(const char* payload, const char* name, int* val) {
     // Find the entry for the specified attribute name
-    char *attribute = strstr(payload, name);
-    if (!attribute)
-    {
+    char* attribute = strstr(payload, name);
+    if (!attribute) {
         return false;
     }
 
     // Locate the start of the value
-    char *valst = strstr(attribute, ":");
-    if (!valst)
-    {
+    char* valst = strstr(attribute, ":");
+    if (!valst) {
         return false;
     }
 
@@ -1051,8 +927,7 @@ bool parseSdpAttributeToInt(const char *payload, const char *name, int *val)
 }
 
 // Perform RTSP Handshake with the streaming server machine as part of the connection process
-int performRtspHandshake(PSERVER_INFORMATION serverInfo)
-{
+int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
     int ret;
 
     LC_ASSERT(RtspPortNumber != 0);
@@ -1078,14 +953,12 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
     // 3. The stream is either local or not surround sound (to prevent MTU issues over the Internet)
     LC_ASSERT(StreamConfig.streamingRemotely != STREAM_CFG_AUTO);
     if (StreamConfig.bitrate >= HIGH_AUDIO_BITRATE_THRESHOLD &&
-        (AudioCallbacks.capabilities & CAPABILITY_SLOW_OPUS_DECODER) == 0 &&
-        (StreamConfig.streamingRemotely != STREAM_CFG_REMOTE || CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration) <= 2))
-    {
+            (AudioCallbacks.capabilities & CAPABILITY_SLOW_OPUS_DECODER) == 0 &&
+            (StreamConfig.streamingRemotely != STREAM_CFG_REMOTE || CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration) <= 2)) {
         // If we have an RTSP URL string and it was successfully parsed and copied, use that string
         if (serverInfo->rtspSessionUrl == NULL ||
-            !parseUrlAddrFromRtspUrlString(serverInfo->rtspSessionUrl, urlAddr, sizeof(urlAddr)) ||
-            !PltSafeStrcpy(rtspTargetUrl, sizeof(rtspTargetUrl), serverInfo->rtspSessionUrl))
-        {
+                !parseUrlAddrFromRtspUrlString(serverInfo->rtspSessionUrl, urlAddr, sizeof(urlAddr)) ||
+                !PltSafeStrcpy(rtspTargetUrl, sizeof(rtspTargetUrl), serverInfo->rtspSessionUrl)) {
             // If an RTSP URL string was not provided or failed to parse, we will construct one now as best we can.
             //
             // NB: If the remote address is not a LAN address, the host will likely not enable high quality
@@ -1095,62 +968,56 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
             snprintf(rtspTargetUrl, sizeof(rtspTargetUrl), "rtsp%s://%s:%u", useEnet ? "ru" : "", urlAddr, RtspPortNumber);
         }
     }
-    else
-    {
+    else {
         PltSafeStrcpy(urlAddr, sizeof(urlAddr), "0.0.0.0");
         snprintf(rtspTargetUrl, sizeof(rtspTargetUrl), "rtsp%s://%s:%u", useEnet ? "ru" : "", urlAddr, RtspPortNumber);
     }
 
-    switch (AppVersionQuad[0])
-    {
-    case 3:
-        rtspClientVersion = 10;
-        break;
-    case 4:
-        rtspClientVersion = 11;
-        break;
-    case 5:
-        rtspClientVersion = 12;
-        break;
-    case 6:
-        // Gen 6 has never been seen in the wild
-        rtspClientVersion = 13;
-        break;
-    case 7:
-    default:
-        rtspClientVersion = 14;
-        break;
+    switch (AppVersionQuad[0]) {
+        case 3:
+            rtspClientVersion = 10;
+            break;
+        case 4:
+            rtspClientVersion = 11;
+            break;
+        case 5:
+            rtspClientVersion = 12;
+            break;
+        case 6:
+            // Gen 6 has never been seen in the wild
+            rtspClientVersion = 13;
+            break;
+        case 7:
+        default:
+            rtspClientVersion = 14;
+            break;
     }
-
+    
     // Setup ENet if required by this GFE version
-    if (useEnet)
-    {
+    if (useEnet) {
         ENetAddress address;
         ENetEvent event;
-
+        
         enet_address_set_address(&address, (struct sockaddr *)&RemoteAddr, AddrLen);
         enet_address_set_port(&address, RtspPortNumber);
-
+        
         // Create a client that can use 1 outgoing connection and 1 channel
         client = enet_host_create(RemoteAddr.ss_family, NULL, 1, 1, 0, 0);
-        if (client == NULL)
-        {
+        if (client == NULL) {
             return -1;
         }
-
+    
         // Connect to the host
         peer = enet_host_connect(client, &address, 1, 0);
-        if (peer == NULL)
-        {
+        if (peer == NULL) {
             enet_host_destroy(client);
             client = NULL;
             return -1;
         }
-
+    
         // Wait for the connect to complete
         if (serviceEnetHost(client, &event, RTSP_CONNECT_TIMEOUT_SEC * 1000) <= 0 ||
-            event.type != ENET_EVENT_TYPE_CONNECT)
-        {
+            event.type != ENET_EVENT_TYPE_CONNECT) {
             Limelog("RTSP: Failed to connect to UDP port %u: error %d\n", RtspPortNumber, LastSocketFail());
             enet_peer_reset(peer);
             peer = NULL;
@@ -1167,17 +1034,15 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
         RTSP_MESSAGE response;
         int error = -1;
 
-        if (!requestOptions(&response, &error))
-        {
+        if (!requestOptions(&response, &error)) {
             Limelog("RTSP OPTIONS request failed: %d\n", error);
             ret = error;
             goto Exit;
         }
 
-        if (response.message.response.statusCode != 200)
-        {
+        if (response.message.response.statusCode != 200) {
             Limelog("RTSP OPTIONS request failed: %d\n",
-                    response.message.response.statusCode);
+                response.message.response.statusCode);
             ret = response.message.response.statusCode;
             goto Exit;
         }
@@ -1189,110 +1054,89 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
         RTSP_MESSAGE response;
         int error = -1;
 
-        if (!requestDescribe(&response, &error))
-        {
+        if (!requestDescribe(&response, &error)) {
             Limelog("RTSP DESCRIBE request failed: %d\n", error);
             ret = error;
             goto Exit;
         }
 
-        if (response.message.response.statusCode != 200)
-        {
+        if (response.message.response.statusCode != 200) {
             Limelog("RTSP DESCRIBE request failed: %d\n",
-                    response.message.response.statusCode);
+                response.message.response.statusCode);
             ret = response.message.response.statusCode;
             goto Exit;
         }
 
-        if (!response.payload)
-        {
+        if (!response.payload) {
             Limelog("RTSP DESCRIBE no content in response\n");
             ret = -1;
             goto Exit;
         }
-
-        if ((StreamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_AV1) && strstr(response.payload, "AV1/90000"))
-        {
-            if ((serverInfo->serverCodecModeSupport & SCM_AV1_HIGH10_444) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_AV1_HIGH10_444))
-            {
+        
+        if ((StreamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_AV1) && strstr(response.payload, "AV1/90000")) {
+            if ((serverInfo->serverCodecModeSupport & SCM_AV1_HIGH10_444) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_AV1_HIGH10_444)) {
                 NegotiatedVideoFormat = VIDEO_FORMAT_AV1_HIGH10_444;
             }
-            else if ((serverInfo->serverCodecModeSupport & SCM_AV1_MAIN10) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_AV1_MAIN10))
-            {
+            else if ((serverInfo->serverCodecModeSupport & SCM_AV1_MAIN10) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_AV1_MAIN10)) {
                 NegotiatedVideoFormat = VIDEO_FORMAT_AV1_MAIN10;
             }
-            else if ((serverInfo->serverCodecModeSupport & SCM_AV1_HIGH8_444) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_AV1_HIGH8_444))
-            {
+            else if ((serverInfo->serverCodecModeSupport & SCM_AV1_HIGH8_444) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_AV1_HIGH8_444)) {
                 NegotiatedVideoFormat = VIDEO_FORMAT_AV1_HIGH8_444;
             }
-            else
-            {
+            else {
                 NegotiatedVideoFormat = VIDEO_FORMAT_AV1_MAIN8;
             }
         }
-        else if ((StreamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_H265) && strstr(response.payload, "sprop-parameter-sets=AAAAAU"))
-        {
+        else if ((StreamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_H265) && strstr(response.payload, "sprop-parameter-sets=AAAAAU")) {
             // The RTSP DESCRIBE reply will contain a collection of SDP media attributes that
             // describe the various supported video stream formats and include the SPS, PPS,
             // and VPS (if applicable). We will use this information to determine whether the
             // server can support HEVC. For some reason, they still set the MIME type of the HEVC
             // format to H264, so we can't just look for the HEVC MIME type. What we'll do instead is
             // look for the base 64 encoded VPS NALU prefix that is unique to the HEVC bitstream.
-            if ((serverInfo->serverCodecModeSupport & SCM_HEVC_REXT10_444) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_H265_REXT10_444))
-            {
+            if ((serverInfo->serverCodecModeSupport & SCM_HEVC_REXT10_444) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_H265_REXT10_444)) {
                 NegotiatedVideoFormat = VIDEO_FORMAT_H265_REXT10_444;
             }
-            else if ((serverInfo->serverCodecModeSupport & SCM_HEVC_MAIN10) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_H265_MAIN10))
-            {
+            else if ((serverInfo->serverCodecModeSupport & SCM_HEVC_MAIN10) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_H265_MAIN10)) {
                 NegotiatedVideoFormat = VIDEO_FORMAT_H265_MAIN10;
             }
-            else if ((serverInfo->serverCodecModeSupport & SCM_HEVC_REXT8_444) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_H265_REXT8_444))
-            {
+            else if ((serverInfo->serverCodecModeSupport & SCM_HEVC_REXT8_444) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_H265_REXT8_444)) {
                 NegotiatedVideoFormat = VIDEO_FORMAT_H265_REXT8_444;
             }
-            else
-            {
+            else {
                 NegotiatedVideoFormat = VIDEO_FORMAT_H265;
             }
         }
-        else
-        {
-            if ((serverInfo->serverCodecModeSupport & SCM_H264_HIGH8_444) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_H264_HIGH8_444))
-            {
+        else {
+            if ((serverInfo->serverCodecModeSupport & SCM_H264_HIGH8_444) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_H264_HIGH8_444)) {
                 NegotiatedVideoFormat = VIDEO_FORMAT_H264_HIGH8_444;
             }
-            else
-            {
+            else {
                 NegotiatedVideoFormat = VIDEO_FORMAT_H264;
             }
 
             // Dimensions over 4096 are only supported with HEVC on NVENC
-            if (StreamConfig.width > 4096 || StreamConfig.height > 4096)
-            {
+            if (StreamConfig.width > 4096 || StreamConfig.height > 4096) {
                 Limelog("WARNING: Host PC doesn't support HEVC. Streaming at resolutions above 4K using H.264 will likely fail!\n");
             }
         }
 
         // Look for the SDP attribute that indicates we're dealing with a server that supports RFI
         ReferenceFrameInvalidationSupported = strstr(response.payload, "x-nv-video[0].refPicInvalidation") != NULL;
-        if (!ReferenceFrameInvalidationSupported)
-        {
+        if (!ReferenceFrameInvalidationSupported) {
             Limelog("Reference frame invalidation is not supported by this host\n");
         }
 
         // Look for the Sunshine feature flags in the SDP attributes
-        if (!parseSdpAttributeToUInt(response.payload, "x-ss-general.featureFlags", &SunshineFeatureFlags))
-        {
+        if (!parseSdpAttributeToUInt(response.payload, "x-ss-general.featureFlags", &SunshineFeatureFlags)) {
             SunshineFeatureFlags = 0;
         }
 
         // Look for the Sunshine encryption flags in the SDP attributes
-        if (!parseSdpAttributeToUInt(response.payload, "x-ss-general.encryptionSupported", &EncryptionFeaturesSupported))
-        {
+        if (!parseSdpAttributeToUInt(response.payload, "x-ss-general.encryptionSupported", &EncryptionFeaturesSupported)) {
             EncryptionFeaturesSupported = 0;
         }
-        if (!parseSdpAttributeToUInt(response.payload, "x-ss-general.encryptionRequested", &EncryptionFeaturesRequested))
-        {
+        if (!parseSdpAttributeToUInt(response.payload, "x-ss-general.encryptionRequested", &EncryptionFeaturesRequested)) {
             EncryptionFeaturesRequested = 0;
         }
         EncryptionFeaturesEnabled = 0;
@@ -1302,19 +1146,17 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
         // what we advertised to get the mutually supported feature set.
         {
             uint32_t serverRepcFeatures = 0;
-            if (parseSdpAttributeToUInt(response.payload, "x-ss-general.repcFeatures", &serverRepcFeatures))
-            {
+            if (parseSdpAttributeToUInt(response.payload, "x-ss-general.repcFeatures", &serverRepcFeatures)) {
                 // Intersect server-supported features with what we advertised in our SDP offer
                 RepcFeaturesEnabled = serverRepcFeatures & StreamConfig.repcFeatureFlags;
                 Limelog("RePc: Negotiated features = 0x%x (server=0x%x, client=0x%x)\n",
-                        RepcFeaturesEnabled, serverRepcFeatures);
+                        RepcFeaturesEnabled, serverRepcFeatures, clientRepcFeatures);
             }
         }
 
         // Parse the Opus surround parameters out of the RTSP DESCRIBE response.
         ret = parseOpusConfigurations(&response);
-        if (ret != 0)
-        {
+        if (ret != 0) {
             goto Exit;
         }
 
@@ -1323,47 +1165,42 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
 
     {
         RTSP_MESSAGE response;
-        char *sessionId;
-        char *pingPayload;
+        char* sessionId;
+        char* pingPayload;
         int error = -1;
-        char *strtokCtx = NULL;
+        char* strtokCtx = NULL;
 
         if (!setupStream(&response,
                          AppVersionQuad[0] >= 5 ? "streamid=audio/0/0" : "streamid=audio",
-                         &error))
-        {
+                         &error)) {
             Limelog("RTSP SETUP streamid=audio request failed: %d\n", error);
             ret = error;
             goto Exit;
         }
 
-        if (response.message.response.statusCode != 200)
-        {
+        if (response.message.response.statusCode != 200) {
             Limelog("RTSP SETUP streamid=audio request failed: %d\n",
-                    response.message.response.statusCode);
+                response.message.response.statusCode);
             ret = response.message.response.statusCode;
             goto Exit;
         }
 
         // Parse the audio port out of the RTSP SETUP response
         LC_ASSERT(AudioPortNumber == 0);
-        if (!parseServerPortFromTransport(&response, &AudioPortNumber))
-        {
+        if (!parseServerPortFromTransport(&response, &AudioPortNumber)) {
             // Use the well known port if parsing fails
             AudioPortNumber = 48000;
 
             Limelog("Audio port: %u (RTSP parsing failed)\n", AudioPortNumber);
         }
-        else
-        {
+        else {
             Limelog("Audio port: %u\n", AudioPortNumber);
         }
 
         // Parse the Sunshine ping payload protocol extension if present
         memset(&AudioPingPayload, 0, sizeof(AudioPingPayload));
         pingPayload = getOptionContent(response.options, "X-SS-Ping-Payload");
-        if (pingPayload != NULL && strlen(pingPayload) == sizeof(AudioPingPayload.payload))
-        {
+        if (pingPayload != NULL && strlen(pingPayload) == sizeof(AudioPingPayload.payload)) {
             memcpy(AudioPingPayload.payload, pingPayload, sizeof(AudioPingPayload.payload));
         }
 
@@ -1374,21 +1211,19 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
 
         sessionId = getOptionContent(response.options, "Session");
 
-        if (sessionId == NULL)
-        {
+        if (sessionId == NULL) {
             Limelog("RTSP SETUP streamid=audio is missing session attribute\n");
             ret = -1;
             goto Exit;
         }
 
         // Given there is a non-null session id, get the
-        // first token of the session until ";", which
+        // first token of the session until ";", which 
         // resolves any 454 session not found errors on
         // standard RTSP server implementations.
-        // (i.e - sessionId = "DEADBEEFCAFE;timeout = 90")
+        // (i.e - sessionId = "DEADBEEFCAFE;timeout = 90") 
         sessionIdString = strdup(strtok_r(sessionId, ";", &strtokCtx));
-        if (sessionIdString == NULL)
-        {
+        if (sessionIdString == NULL) {
             Limelog("Failed to duplicate session ID string\n");
             ret = -1;
             goto Exit;
@@ -1402,21 +1237,19 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
     {
         RTSP_MESSAGE response;
         int error = -1;
-        char *pingPayload;
+        char* pingPayload;
 
         if (!setupStream(&response,
                          AppVersionQuad[0] >= 5 ? "streamid=video/0/0" : "streamid=video",
-                         &error))
-        {
+                         &error)) {
             Limelog("RTSP SETUP streamid=video request failed: %d\n", error);
             ret = error;
             goto Exit;
         }
 
-        if (response.message.response.statusCode != 200)
-        {
+        if (response.message.response.statusCode != 200) {
             Limelog("RTSP SETUP streamid=video request failed: %d\n",
-                    response.message.response.statusCode);
+                response.message.response.statusCode);
             ret = response.message.response.statusCode;
             goto Exit;
         }
@@ -1424,73 +1257,63 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
         // Parse the Sunshine ping payload protocol extension if present
         memset(&VideoPingPayload, 0, sizeof(VideoPingPayload));
         pingPayload = getOptionContent(response.options, "X-SS-Ping-Payload");
-        if (pingPayload != NULL && strlen(pingPayload) == sizeof(VideoPingPayload.payload))
-        {
+        if (pingPayload != NULL && strlen(pingPayload) == sizeof(VideoPingPayload.payload)) {
             memcpy(VideoPingPayload.payload, pingPayload, sizeof(VideoPingPayload.payload));
         }
 
         // Parse the video port out of the RTSP SETUP response
         LC_ASSERT(VideoPortNumber == 0);
-        if (!parseServerPortFromTransport(&response, &VideoPortNumber))
-        {
+        if (!parseServerPortFromTransport(&response, &VideoPortNumber)) {
             // Use the well known port if parsing fails
             VideoPortNumber = 47998;
 
             Limelog("Video port: %u (RTSP parsing failed)\n", VideoPortNumber);
         }
-        else
-        {
+        else {
             Limelog("Video port: %u\n", VideoPortNumber);
         }
 
         freeMessage(&response);
     }
-
-    if (AppVersionQuad[0] >= 5)
-    {
+    
+    if (AppVersionQuad[0] >= 5) {
         RTSP_MESSAGE response;
         int error = -1;
-        char *connectData;
+        char* connectData;
 
         if (!setupStream(&response,
                          controlStreamId,
-                         &error))
-        {
+                         &error)) {
             Limelog("RTSP SETUP streamid=control request failed: %d\n", error);
             ret = error;
             goto Exit;
         }
 
-        if (response.message.response.statusCode != 200)
-        {
+        if (response.message.response.statusCode != 200) {
             Limelog("RTSP SETUP streamid=control request failed: %d\n",
-                    response.message.response.statusCode);
+                response.message.response.statusCode);
             ret = response.message.response.statusCode;
             goto Exit;
         }
 
         // Parse the Sunshine control connect data extension if present
         connectData = getOptionContent(response.options, "X-SS-Connect-Data");
-        if (connectData != NULL)
-        {
+        if (connectData != NULL) {
             ControlConnectData = (uint32_t)strtoul(connectData, NULL, 0);
         }
-        else
-        {
+        else {
             ControlConnectData = 0;
         }
 
         // Parse the control port out of the RTSP SETUP response
         LC_ASSERT(ControlPortNumber == 0);
-        if (!parseServerPortFromTransport(&response, &ControlPortNumber))
-        {
+        if (!parseServerPortFromTransport(&response, &ControlPortNumber)) {
             // Use the well known port if parsing fails
             ControlPortNumber = 47999;
 
             Limelog("Control port: %u (RTSP parsing failed)\n", ControlPortNumber);
         }
-        else
-        {
+        else {
             Limelog("Control port: %u\n", ControlPortNumber);
         }
 
@@ -1501,17 +1324,15 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
         RTSP_MESSAGE response;
         int error = -1;
 
-        if (!sendVideoAnnounce(&response, &error))
-        {
+        if (!sendVideoAnnounce(&response, &error)) {
             Limelog("RTSP ANNOUNCE request failed: %d\n", error);
             ret = error;
             goto Exit;
         }
 
-        if (response.message.response.statusCode != 200)
-        {
+        if (response.message.response.statusCode != 200) {
             Limelog("RTSP ANNOUNCE request failed: %d\n",
-                    response.message.response.statusCode);
+                response.message.response.statusCode);
             ret = response.message.response.statusCode;
             goto Exit;
         }
@@ -1520,45 +1341,39 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
     }
 
     // GFE 3.22 uses a single PLAY message
-    if (APP_VERSION_AT_LEAST(7, 1, 431))
-    {
+    if (APP_VERSION_AT_LEAST(7, 1, 431)) {
         RTSP_MESSAGE response;
         int error = -1;
 
-        if (!playStream(&response, "/", &error))
-        {
+        if (!playStream(&response, "/", &error)) {
             Limelog("RTSP PLAY request failed: %d\n", error);
             ret = error;
             goto Exit;
         }
 
-        if (response.message.response.statusCode != 200)
-        {
+        if (response.message.response.statusCode != 200) {
             Limelog("RTSP PLAY failed: %d\n",
-                    response.message.response.statusCode);
+                response.message.response.statusCode);
             ret = response.message.response.statusCode;
             goto Exit;
         }
 
         freeMessage(&response);
     }
-    else
-    {
+    else {
         {
             RTSP_MESSAGE response;
             int error = -1;
 
-            if (!playStream(&response, "streamid=video", &error))
-            {
+            if (!playStream(&response, "streamid=video", &error)) {
                 Limelog("RTSP PLAY streamid=video request failed: %d\n", error);
                 ret = error;
                 goto Exit;
             }
 
-            if (response.message.response.statusCode != 200)
-            {
+            if (response.message.response.statusCode != 200) {
                 Limelog("RTSP PLAY streamid=video failed: %d\n",
-                        response.message.response.statusCode);
+                    response.message.response.statusCode);
                 ret = response.message.response.statusCode;
                 goto Exit;
             }
@@ -1570,17 +1385,15 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
             RTSP_MESSAGE response;
             int error = -1;
 
-            if (!playStream(&response, "streamid=audio", &error))
-            {
+            if (!playStream(&response, "streamid=audio", &error)) {
                 Limelog("RTSP PLAY streamid=audio request failed: %d\n", error);
                 ret = error;
                 goto Exit;
             }
 
-            if (response.message.response.statusCode != 200)
-            {
+            if (response.message.response.statusCode != 200) {
                 Limelog("RTSP PLAY streamid=audio failed: %d\n",
-                        response.message.response.statusCode);
+                    response.message.response.statusCode);
                 ret = response.message.response.statusCode;
                 goto Exit;
             }
@@ -1589,27 +1402,24 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo)
         }
     }
 
+    
     ret = 0;
-
+    
 Exit:
     // Cleanup the ENet stuff
-    if (useEnet)
-    {
-        if (peer != NULL)
-        {
+    if (useEnet) {
+        if (peer != NULL) {
             enet_peer_disconnect_now(peer, 0);
             peer = NULL;
         }
-
-        if (client != NULL)
-        {
+        
+        if (client != NULL) {
             enet_host_destroy(client);
             client = NULL;
         }
     }
 
-    if (sessionIdString != NULL)
-    {
+    if (sessionIdString != NULL) {
         free(sessionIdString);
         sessionIdString = NULL;
     }

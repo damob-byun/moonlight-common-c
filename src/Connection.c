@@ -16,6 +16,10 @@ STREAM_CONFIGURATION StreamConfig;
 CONNECTION_LISTENER_CALLBACKS ListenerCallbacks;
 DECODER_RENDERER_CALLBACKS VideoCallbacks;
 AUDIO_RENDERER_CALLBACKS AudioCallbacks;
+
+// Saved audio stream startup parameters for LiRestartAudioStream()
+static void* SavedAudioContext;
+static int SavedArFlags;
 int NegotiatedVideoFormat;
 volatile bool ConnectionInterrupted;
 bool HighQualitySurroundSupported;
@@ -494,6 +498,10 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     ListenerCallbacks.stageComplete(STAGE_VIDEO_STREAM_START);
     Limelog("done\n");
 
+    // Save for LiRestartAudioStream()
+    SavedAudioContext = audioContext;
+    SavedArFlags = arFlags;
+
     Limelog("Starting audio stream...");
     ListenerCallbacks.stageStarting(STAGE_AUDIO_STREAM_START);
     err = startAudioStream(audioContext, arFlags);
@@ -544,4 +552,44 @@ const char* LiGetLaunchUrlQueryParameters(void) {
     // v0 = Video encryption and control stream encryption v2
     // v1 = RTSP encryption
     return "&corever=1";
+}
+
+// Restarts the audio stream (UDP level) without tearing down the full connection.
+// Stops and destroys the current audio stream, then re-initializes and re-starts it
+// using the same UDP port and audio context negotiated at connection time.
+// Safe to call from the main/GUI thread. Must NOT be called from the audio decode thread.
+int LiRestartAudioStream(void) {
+    int err;
+
+    Limelog("LiRestartAudioStream: stopping audio stream\n");
+    stopAudioStream();
+
+    Limelog("LiRestartAudioStream: destroying audio stream\n");
+    destroyAudioStream();
+
+    Limelog("LiRestartAudioStream: re-initializing audio stream\n");
+    err = initializeAudioStream();
+    if (err != 0) {
+        Limelog("LiRestartAudioStream: initializeAudioStream failed: %d\n", err);
+        return err;
+    }
+
+    // Re-bind UDP socket on the same port that was negotiated via RTSP
+    err = notifyAudioPortNegotiationComplete();
+    if (err != 0) {
+        Limelog("LiRestartAudioStream: notifyAudioPortNegotiationComplete failed: %d\n", err);
+        destroyAudioStream();
+        return err;
+    }
+
+    Limelog("LiRestartAudioStream: starting audio stream\n");
+    err = startAudioStream(SavedAudioContext, SavedArFlags);
+    if (err != 0) {
+        Limelog("LiRestartAudioStream: startAudioStream failed: %d\n", err);
+        destroyAudioStream();
+        return err;
+    }
+
+    Limelog("LiRestartAudioStream: audio stream restarted successfully\n");
+    return 0;
 }
