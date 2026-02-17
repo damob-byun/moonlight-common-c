@@ -1150,7 +1150,7 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
                 // Intersect server-supported features with what we advertised in our SDP offer
                 RepcFeaturesEnabled = serverRepcFeatures & StreamConfig.repcFeatureFlags;
                 Limelog("RePc: Negotiated features = 0x%x (server=0x%x, client=0x%x)\n",
-                        RepcFeaturesEnabled, serverRepcFeatures, clientRepcFeatures);
+                        RepcFeaturesEnabled, serverRepcFeatures);
             }
         }
 
